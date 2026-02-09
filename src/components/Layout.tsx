@@ -2,7 +2,7 @@ import { ReactNode, useState, useCallback, memo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { LayoutDashboard, Users, Wallet, TrendingUp, TrendingDown, FileText, Settings, Menu, X, LogOut, GraduationCap } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import logoImg from '@/assets/logo-institucional.png';
+import defaultLogoImg from '@/assets/logo-institucional.png';
 import { useSettings } from '@/contexts/SettingsContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -54,12 +54,14 @@ const NavItem = memo(function NavItem({
 // Memoized sidebar content
 const SidebarContent = memo(function SidebarContent({ 
   institutionName,
+  logoUrl,
   currentPath,
   onNavigate,
   onLogout,
   showLogout = false
 }: {
   institutionName: string;
+  logoUrl?: string | null;
   currentPath: string;
   onNavigate: (href: string) => void;
   onLogout: () => void;
@@ -69,7 +71,7 @@ const SidebarContent = memo(function SidebarContent({
     <div className="flex h-full flex-col">
       <div className="border-b p-4">
         <div className="flex items-center gap-3">
-          <img src={logoImg} alt="Logo institucional" className="h-10 w-auto object-contain" />
+          <img src={logoUrl || defaultLogoImg} alt="Logo institucional" className="h-10 w-auto object-contain" onError={(e) => { (e.target as HTMLImageElement).src = defaultLogoImg; }} />
           <h2 className="text-lg font-extrabold leading-tight">{institutionName}</h2>
         </div>
       </div>
@@ -142,6 +144,7 @@ export default function Layout({ children }: LayoutProps) {
               </SheetClose>
               <SidebarContent
                 institutionName={settings.institution_name}
+                logoUrl={settings.logo_url}
                 currentPath={location.pathname}
                 onNavigate={handleNavigate}
                 onLogout={handleLogout}
@@ -195,6 +198,7 @@ export default function Layout({ children }: LayoutProps) {
       <aside className="w-64 border-r bg-card flex-shrink-0">
         <SidebarContent
           institutionName={settings.institution_name}
+          logoUrl={settings.logo_url}
           currentPath={location.pathname}
           onNavigate={handleNavigate}
           onLogout={handleLogout}
