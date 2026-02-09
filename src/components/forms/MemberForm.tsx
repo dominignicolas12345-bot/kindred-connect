@@ -3,12 +3,9 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useSettings } from '@/contexts/SettingsContext';
-
 interface MemberFormProps {
   member?: {
     id: string;
@@ -28,27 +25,44 @@ interface MemberFormProps {
   onSuccess: () => void;
   onCancel: () => void;
 }
-
-const GRADE_OPTIONS = [
-  { value: 'aprendiz', label: 'Aprendiz' },
-  { value: 'companero', label: 'Companero' },
-  { value: 'maestro', label: 'Maestro' },
-];
-
-const STATUS_OPTIONS = [
-  { value: 'activo', label: 'Activo' },
-  { value: 'inactivo', label: 'Inactivo' },
-];
-
-const CARGO_OPTIONS = [
-  { value: 'sin_cargo', label: 'Sin cargo' },
-  { value: 'venerable_maestro', label: 'Venerable Maestro' },
-  { value: 'primer_vigilante', label: 'Primer Vigilante' },
-  { value: 'segundo_vigilante', label: 'Segundo Vigilante' },
-  { value: 'tesorero', label: 'Tesorero' },
-];
-
-export default function MemberForm({ member, onSuccess, onCancel }: MemberFormProps) {
+const GRADE_OPTIONS = [{
+  value: 'aprendiz',
+  label: 'Aprendiz'
+}, {
+  value: 'companero',
+  label: 'Companero'
+}, {
+  value: 'maestro',
+  label: 'Maestro'
+}];
+const STATUS_OPTIONS = [{
+  value: 'activo',
+  label: 'Activo'
+}, {
+  value: 'inactivo',
+  label: 'Inactivo'
+}];
+const CARGO_OPTIONS = [{
+  value: 'sin_cargo',
+  label: 'Sin cargo'
+}, {
+  value: 'venerable_maestro',
+  label: 'Venerable Maestro'
+}, {
+  value: 'primer_vigilante',
+  label: 'Primer Vigilante'
+}, {
+  value: 'segundo_vigilante',
+  label: 'Segundo Vigilante'
+}, {
+  value: 'tesorero',
+  label: 'Tesorero'
+}];
+export default function MemberForm({
+  member,
+  onSuccess,
+  onCancel
+}: MemberFormProps) {
   const [formData, setFormData] = useState({
     full_name: member?.full_name || '',
     phone: member?.phone || '',
@@ -60,47 +74,63 @@ export default function MemberForm({ member, onSuccess, onCancel }: MemberFormPr
     address: member?.address || '',
     join_date: member?.join_date || '',
     birth_date: member?.birth_date || '',
-    cargo_logial: member?.cargo_logial || 'sin_cargo',
+    cargo_logial: member?.cargo_logial || 'sin_cargo'
   });
   const [loading, setLoading] = useState(false);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [defaultFee, setDefaultFee] = useState(50);
-  const { toast } = useToast();
-  const { settings } = useSettings();
-
+  const {
+    toast
+  } = useToast();
+  const {
+    settings
+  } = useSettings();
   useEffect(() => {
     const loadData = async () => {
       setLoadingSettings(true);
-      const { data: settingsData } = await supabase.from('settings').select('monthly_fee_base').limit(1).maybeSingle();
+      const {
+        data: settingsData
+      } = await supabase.from('settings').select('monthly_fee_base').limit(1).maybeSingle();
       const fee = settingsData?.monthly_fee_base || 50;
       setDefaultFee(fee);
       if (!member) {
-        setFormData(prev => ({ ...prev, treasury_amount: fee.toString() }));
+        setFormData(prev => ({
+          ...prev,
+          treasury_amount: fee.toString()
+        }));
       }
       setLoadingSettings(false);
     };
     loadData();
   }, [member]);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
     if (!formData.full_name.trim()) {
-      toast({ title: 'Error', description: 'El nombre completo es obligatorio', variant: 'destructive' });
+      toast({
+        title: 'Error',
+        description: 'El nombre completo es obligatorio',
+        variant: 'destructive'
+      });
       return;
     }
     if (!formData.cedula.trim()) {
-      toast({ title: 'Error', description: 'La cedula es obligatoria', variant: 'destructive' });
+      toast({
+        title: 'Error',
+        description: 'La cedula es obligatoria',
+        variant: 'destructive'
+      });
       return;
     }
     if (!formData.join_date) {
-      toast({ title: 'Error', description: 'La fecha de ingreso es obligatoria', variant: 'destructive' });
+      toast({
+        title: 'Error',
+        description: 'La fecha de ingreso es obligatoria',
+        variant: 'destructive'
+      });
       return;
     }
-
     await performSubmit();
   };
-
   const performSubmit = async () => {
     setLoading(true);
     try {
@@ -115,106 +145,139 @@ export default function MemberForm({ member, onSuccess, onCancel }: MemberFormPr
         address: formData.address.trim() || null,
         join_date: formData.join_date || null,
         birth_date: formData.birth_date || null,
-        cargo_logial: formData.cargo_logial === 'sin_cargo' ? null : formData.cargo_logial || null,
+        cargo_logial: formData.cargo_logial === 'sin_cargo' ? null : formData.cargo_logial || null
       };
-
       if (member) {
-        const { error } = await supabase.from('members').update(dataToSave).eq('id', member.id);
+        const {
+          error
+        } = await supabase.from('members').update(dataToSave).eq('id', member.id);
         if (error) throw error;
-        toast({ title: 'Miembro actualizado correctamente' });
+        toast({
+          title: 'Miembro actualizado correctamente'
+        });
       } else {
-        const { error } = await supabase.from('members').insert([dataToSave]);
+        const {
+          error
+        } = await supabase.from('members').insert([dataToSave]);
         if (error) throw error;
-        toast({ title: 'Miembro creado correctamente' });
+        toast({
+          title: 'Miembro creado correctamente'
+        });
       }
       onSuccess();
     } catch (error: any) {
-      toast({ title: 'Error', description: error.message || 'No se pudo guardar el miembro', variant: 'destructive' });
+      toast({
+        title: 'Error',
+        description: error.message || 'No se pudo guardar el miembro',
+        variant: 'destructive'
+      });
     } finally {
       setLoading(false);
     }
   };
-
   if (loadingSettings) {
     return <div className="flex items-center justify-center py-8"><span className="text-muted-foreground">Cargando...</span></div>;
   }
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+  return <form onSubmit={handleSubmit} className="space-y-4">
       <div>
         <Label htmlFor="full_name">Nombre Completo *</Label>
-        <Input id="full_name" required value={formData.full_name} onChange={(e) => setFormData({ ...formData, full_name: e.target.value })} />
+        <Input id="full_name" required value={formData.full_name} onChange={e => setFormData({
+        ...formData,
+        full_name: e.target.value
+      })} />
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
           <Label htmlFor="cedula">Cedula *</Label>
-          <Input id="cedula" required value={formData.cedula} onChange={(e) => setFormData({ ...formData, cedula: e.target.value })} placeholder="Ej: 1712345678" />
+          <Input id="cedula" required value={formData.cedula} onChange={e => setFormData({
+          ...formData,
+          cedula: e.target.value
+        })} placeholder="Ej: 1712345678" />
         </div>
         <div>
           <Label htmlFor="degree">Grado *</Label>
-          <Select value={formData.degree} onValueChange={(value) => setFormData({ ...formData, degree: value })}>
+          <Select value={formData.degree} onValueChange={value => setFormData({
+          ...formData,
+          degree: value
+        })}>
             <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>{GRADE_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
+            <SelectContent>{GRADE_OPTIONS.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
           </Select>
         </div>
       </div>
 
       <div>
         <Label htmlFor="cargo_logial">Cargo Logial</Label>
-        <Select value={formData.cargo_logial} onValueChange={(value) => setFormData({ ...formData, cargo_logial: value })}>
+        <Select value={formData.cargo_logial} onValueChange={value => setFormData({
+        ...formData,
+        cargo_logial: value
+      })}>
           <SelectTrigger><SelectValue placeholder="Seleccione un cargo" /></SelectTrigger>
-          <SelectContent>{CARGO_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
+          <SelectContent>{CARGO_OPTIONS.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground mt-1">Cargo que ejerce el miembro en la logia</p>
       </div>
 
       <div>
         <Label htmlFor="address">Direccion</Label>
-        <Input id="address" value={formData.address} onChange={(e) => setFormData({ ...formData, address: e.target.value })} placeholder="Direccion completa" />
+        <Input id="address" value={formData.address} onChange={e => setFormData({
+        ...formData,
+        address: e.target.value
+      })} placeholder="Direccion completa" />
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
           <Label htmlFor="join_date">Fecha de Ingreso *</Label>
-          <Input id="join_date" type="date" required value={formData.join_date} onChange={(e) => setFormData({ ...formData, join_date: e.target.value })} />
+          <Input id="join_date" type="date" required value={formData.join_date} onChange={e => setFormData({
+          ...formData,
+          join_date: e.target.value
+        })} />
         </div>
         <div>
           <Label htmlFor="birth_date">Fecha de Nacimiento</Label>
-          <Input id="birth_date" type="date" value={formData.birth_date} onChange={(e) => setFormData({ ...formData, birth_date: e.target.value })} />
+          <Input id="birth_date" type="date" value={formData.birth_date} onChange={e => setFormData({
+          ...formData,
+          birth_date: e.target.value
+        })} />
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
           <Label htmlFor="email">Email</Label>
-          <Input id="email" type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} placeholder="ejemplo@email.com" />
+          <Input id="email" type="email" value={formData.email} onChange={e => setFormData({
+          ...formData,
+          email: e.target.value
+        })} placeholder="ejemplo@email.com" />
         </div>
         <div>
           <Label htmlFor="phone">Telefono</Label>
-          <Input id="phone" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} placeholder="Ej: +593 99 123 4567" />
+          <Input id="phone" value={formData.phone} onChange={e => setFormData({
+          ...formData,
+          phone: e.target.value
+        })} placeholder="Ej: +593 99 123 4567" />
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        <div>
-          <Label htmlFor="treasury_amount">Monto para Tesoreria ($)</Label>
-          <Input id="treasury_amount" type="number" step="0.01" min="0" value={formData.treasury_amount} onChange={(e) => setFormData({ ...formData, treasury_amount: e.target.value })} placeholder={defaultFee.toString()} />
-          <p className="text-xs text-muted-foreground mt-1">Por defecto: ${defaultFee.toFixed(2)}</p>
-        </div>
+        
         <div>
           <Label htmlFor="status">Estado</Label>
-          <Select value={formData.status} onValueChange={(value) => setFormData({ ...formData, status: value })}>
+          <Select value={formData.status} onValueChange={value => setFormData({
+          ...formData,
+          status: value
+        })}>
             <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>{STATUS_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
+            <SelectContent>{STATUS_OPTIONS.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
           </Select>
         </div>
       </div>
 
       <div className="flex gap-2 justify-end pt-4">
         <Button type="button" variant="outline" onClick={onCancel}>Cancelar</Button>
-        <Button type="submit" disabled={loading}>{loading ? 'Guardando...' : (member ? 'Actualizar' : 'Crear')}</Button>
+        <Button type="submit" disabled={loading}>{loading ? 'Guardando...' : member ? 'Actualizar' : 'Crear'}</Button>
       </div>
-    </form>
-  );
+    </form>;
 }
