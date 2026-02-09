@@ -40,6 +40,15 @@ interface MonthlyBreakdown {
   balance: number;
 }
 
+interface SignatureData {
+  treasurerName: string;
+  treasurerDegree: string;
+  treasurerSignatureUrl?: string | null;
+  vmName?: string;
+  vmDegree?: string;
+  vmSignatureUrl?: string | null;
+}
+
 interface CollectionLetterData {
   memberName: string;
   memberDegree: string;
@@ -47,9 +56,14 @@ interface CollectionLetterData {
   monthsOverdue: number;
   totalOwed: number;
   pendingMonths: Array<{ month: number; year: number; amount: number; monthName?: string }>;
+  extraordinaryPending?: Array<{ feeName: string; pending: number }>;
   treasurerName: string;
   treasurerDegree: string;
   currentDate: string;
+  treasurerSignatureUrl?: string | null;
+  vmName?: string;
+  vmDegree?: string;
+  vmSignatureUrl?: string | null;
 }
 
 const CATEGORIES: Record<string, string> = {
@@ -90,12 +104,93 @@ async function addLogoToPDF(doc: jsPDF): Promise<void> {
   });
 }
 
+// Helper to load an image from URL for signatures
+async function loadImageFromUrl(url: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+// Helper to add dual signatures to PDF
+async function addSignaturesToPDF(doc: jsPDF, yPos: number, signatures: SignatureData): Promise<number> {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  
+  // Ensure enough space for signatures
+  if (yPos > pageHeight - 60) {
+    doc.addPage();
+    await addLogoToPDF(doc);
+    yPos = 40;
+  }
+
+  yPos += 10;
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Con estima y fraternidad,', 20, yPos);
+  yPos += 15;
+
+  const leftX = 25;
+  const rightX = pageWidth / 2 + 15;
+  const sigWidth = 50;
+  const sigHeight = 20;
+
+  // Treasurer signature (left)
+  if (signatures.treasurerSignatureUrl) {
+    const sigImg = await loadImageFromUrl(signatures.treasurerSignatureUrl);
+    if (sigImg) {
+      const ratio = Math.min(sigWidth / sigImg.width, sigHeight / sigImg.height);
+      doc.addImage(sigImg, 'PNG', leftX, yPos, sigImg.width * ratio, sigImg.height * ratio);
+    }
+  }
+
+  // VM signature (right)
+  if (signatures.vmSignatureUrl) {
+    const sigImg = await loadImageFromUrl(signatures.vmSignatureUrl);
+    if (sigImg) {
+      const ratio = Math.min(sigWidth / sigImg.width, sigHeight / sigImg.height);
+      doc.addImage(sigImg, 'PNG', rightX, yPos, sigImg.width * ratio, sigImg.height * ratio);
+    }
+  }
+
+  yPos += sigHeight + 3;
+
+  // Lines for signatures
+  doc.setLineWidth(0.3);
+  doc.line(leftX, yPos, leftX + 60, yPos);
+  doc.line(rightX, yPos, rightX + 60, yPos);
+  yPos += 4;
+
+  // Names
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  const treasurerLabel = `${signatures.treasurerDegree} ${signatures.treasurerName}`.trim().toUpperCase();
+  doc.text(treasurerLabel, leftX, yPos);
+  
+  if (signatures.vmName) {
+    const vmLabel = `${signatures.vmDegree || ''} ${signatures.vmName}`.trim().toUpperCase();
+    doc.text(vmLabel, rightX, yPos);
+  }
+  yPos += 4;
+  doc.setFont('helvetica', 'normal');
+  doc.text('TESORERO', leftX, yPos);
+  if (signatures.vmName) {
+    doc.text('VENERABLE MAESTRO', rightX, yPos);
+  }
+
+  return yPos + 5;
+}
+
 export async function generateMonthlyPDF(
   report: ReportData,
   month: number,
   year: number,
   institutionName: string,
-  customTemplate: string
+  customTemplate: string,
+  signatures?: SignatureData
 ): Promise<jsPDF> {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -257,6 +352,12 @@ export async function generateMonthlyPDF(
     styles: { fontSize: 10 },
   });
 
+  // Add signatures
+  yPos = (doc as any).lastAutoTable.finalY + 10;
+  if (signatures) {
+    await addSignaturesToPDF(doc, yPos, signatures);
+  }
+
   // Footer on all pages
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
@@ -286,7 +387,8 @@ export async function generateAnnualPDF(
   year: number,
   institutionName: string,
   customTemplate: string,
-  monthlyBreakdown?: MonthlyBreakdown[]
+  monthlyBreakdown?: MonthlyBreakdown[],
+  signatures?: SignatureData
 ): Promise<jsPDF> {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -444,6 +546,11 @@ export async function generateAnnualPDF(
     yPos = (doc as any).lastAutoTable.finalY + 10;
   }
 
+  // Add signatures
+  if (signatures) {
+    await addSignaturesToPDF(doc, yPos, signatures);
+  }
+
   // Footer on all pages
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
@@ -514,32 +621,55 @@ export async function generateCollectionLetterPDF(data: CollectionLetterData): P
   doc.text(splitText, marginLeft, yPos);
   yPos += splitText.length * lineHeight + 6;
   
-  // Debt details - compact list format
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.text(`Meses pendientes (${data.monthsOverdue}):`, marginLeft, yPos);
-  yPos += lineHeight + 2;
-  
-  // List pending months - compact vertical list
+  // Debt details using table
   if (data.pendingMonths && data.pendingMonths.length > 0) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    
-    for (const pm of data.pendingMonths) {
-      const monthName = pm.monthName || ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'][pm.month - 1];
-      doc.text(`• ${monthName} ${pm.year}: $${pm.amount.toFixed(2)}`, marginLeft + 5, yPos);
-      yPos += 4;
-    }
-    yPos += 2;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('Cuotas mensuales pendientes:', marginLeft, yPos);
+    yPos += 6;
+
+    autoTable(doc, {
+      startY: yPos,
+      head: [['Mes', 'Año', 'Monto pendiente']],
+      body: data.pendingMonths.map(pm => {
+        const monthName = pm.monthName || ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'][pm.month - 1];
+        return [monthName, pm.year.toString(), `$${pm.amount.toFixed(2)}`];
+      }),
+      theme: 'striped',
+      headStyles: { fillColor: [66, 66, 66] },
+      styles: { fontSize: 9 },
+      margin: { left: marginLeft, right: marginRight },
+    });
+    yPos = (doc as any).lastAutoTable.finalY + 6;
   }
-  
-  doc.setFontSize(10);
+
+  // Extraordinary debts
+  if (data.extraordinaryPending && data.extraordinaryPending.length > 0) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('Cuotas extraordinarias pendientes:', marginLeft, yPos);
+    yPos += 6;
+
+    autoTable(doc, {
+      startY: yPos,
+      head: [['Cuota', 'Monto pendiente']],
+      body: data.extraordinaryPending.map(ep => [ep.feeName, `$${ep.pending.toFixed(2)}`]),
+      theme: 'striped',
+      headStyles: { fillColor: [66, 66, 66] },
+      styles: { fontSize: 9 },
+      margin: { left: marginLeft, right: marginRight },
+    });
+    yPos = (doc as any).lastAutoTable.finalY + 6;
+  }
+
+  doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
   doc.text(`TOTAL ADEUDADO: $${data.totalOwed.toFixed(2)}`, marginLeft, yPos);
   yPos += 8;
   
-  // Continuation paragraphs - more compact
+  // Continuation paragraphs
   doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
   
   const paragraph3 = `Es comprensible que puedan surgir situaciones imprevistas; sin embargo, las aportaciones de todos los hermanos son esenciales para el sostenimiento de nuestras actividades.`;
   
@@ -559,18 +689,15 @@ export async function generateCollectionLetterPDF(data: CollectionLetterData): P
   doc.text(splitText, marginLeft, yPos);
   yPos += splitText.length * lineHeight + 8;
   
-  // Closing
-  doc.text('Con estima y fraternidad,', marginLeft, yPos);
-  yPos += 18;
-  
-  // Signature block - compact formal format
-  doc.setFont('helvetica', 'bold');
-  doc.text(`${data.treasurerDegree} ${data.treasurerName}`.toUpperCase(), marginLeft, yPos);
-  yPos += lineHeight;
-  doc.setFont('helvetica', 'normal');
-  doc.text('TESORERO', marginLeft, yPos);
-  yPos += lineHeight;
-  doc.text(data.institutionName, marginLeft, yPos);
+  // Add dual signatures
+  await addSignaturesToPDF(doc, yPos, {
+    treasurerName: data.treasurerName,
+    treasurerDegree: data.treasurerDegree,
+    treasurerSignatureUrl: data.treasurerSignatureUrl,
+    vmName: data.vmName,
+    vmDegree: data.vmDegree,
+    vmSignatureUrl: data.vmSignatureUrl,
+  });
 
   return doc;
 }

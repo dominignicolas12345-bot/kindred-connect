@@ -271,27 +271,39 @@ export type Database = {
           created_at: string
           id: string
           institution_name: string | null
+          logo_url: string | null
           monthly_fee_base: number | null
           monthly_report_template: string | null
+          treasurer_id: string | null
+          treasurer_signature_url: string | null
           updated_at: string | null
+          vm_signature_url: string | null
         }
         Insert: {
           annual_report_template?: string | null
           created_at?: string
           id?: string
           institution_name?: string | null
+          logo_url?: string | null
           monthly_fee_base?: number | null
           monthly_report_template?: string | null
+          treasurer_id?: string | null
+          treasurer_signature_url?: string | null
           updated_at?: string | null
+          vm_signature_url?: string | null
         }
         Update: {
           annual_report_template?: string | null
           created_at?: string
           id?: string
           institution_name?: string | null
+          logo_url?: string | null
           monthly_fee_base?: number | null
           monthly_report_template?: string | null
+          treasurer_id?: string | null
+          treasurer_signature_url?: string | null
           updated_at?: string | null
+          vm_signature_url?: string | null
         }
         Relationships: []
       }

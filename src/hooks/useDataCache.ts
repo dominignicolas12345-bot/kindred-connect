@@ -8,6 +8,7 @@ export interface Member {
   status: string | null;
   is_treasurer: boolean | null;
   treasury_amount: number | null;
+  cargo_logial: string | null;
   created_at: string;
   email: string | null;
   phone: string | null;
