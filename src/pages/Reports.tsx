@@ -1,4 +1,4 @@
-import { useState, useMemo, forwardRef } from 'react';
+import { useState, useMemo, useEffect, forwardRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -11,6 +11,7 @@ import { useSettings } from '@/contexts/SettingsContext';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { getSystemYear, getSystemMonth } from '@/lib/dateUtils';
 import CuentasPorCobrar from '@/components/reports/CuentasPorCobrar';
+import { supabase } from '@/integrations/supabase/client';
 
 interface ReportData {
   totalMonthlyIncome: number;
@@ -85,8 +86,26 @@ const Reports = forwardRef<HTMLDivElement>(function Reports(_props, ref) {
     extraordinaryIncomes, 
     extraordinaryPayments,
     loading,
-    summary
+    summary,
+    treasurer,
+    members
   } = useDataCache();
+
+  // Fetch signature URLs and VM member
+  const [sigData, setSigData] = useState<{ treasurerSigUrl: string | null; vmSigUrl: string | null; vmMember: any | null }>({ treasurerSigUrl: null, vmSigUrl: null, vmMember: null });
+  
+  useEffect(() => {
+    const load = async () => {
+      const { data } = await supabase.from('settings').select('treasurer_signature_url, vm_signature_url').limit(1).maybeSingle();
+      const vmMember = members.find(m => m.cargo_logial === 'venerable_maestro') || null;
+      setSigData({
+        treasurerSigUrl: (data as any)?.treasurer_signature_url || null,
+        vmSigUrl: (data as any)?.vm_signature_url || null,
+        vmMember,
+      });
+    };
+    load();
+  }, [members]);
 
   const currentYear = getSystemYear();
   const years = Array.from({ length: 5 }, (_, i) => (currentYear - i).toString());
@@ -227,13 +246,25 @@ const Reports = forwardRef<HTMLDivElement>(function Reports(_props, ref) {
     setPreviewData({ type: 'annual', data: reportData, monthlyBreakdown });
   };
 
+  const getSignatures = () => {
+    const GRADE_LABELS: Record<string, string> = { aprendiz: 'Apr.', companero: 'Comp.', maestro: 'M.' };
+    return {
+      treasurerName: treasurer?.full_name || 'Tesorero',
+      treasurerDegree: GRADE_LABELS[treasurer?.degree || ''] || '',
+      treasurerSignatureUrl: sigData.treasurerSigUrl,
+      vmName: sigData.vmMember?.full_name,
+      vmDegree: GRADE_LABELS[sigData.vmMember?.degree || ''] || '',
+      vmSignatureUrl: sigData.vmSigUrl,
+    };
+  };
+
   const generateMonthlyReport = async () => {
     setGeneratingMonthly(true);
     try {
       const month = parseInt(selectedMonth);
       const year = parseInt(selectedYear);
       const reportData = calculateMonthlyData(month, year);
-      const pdf = await generateMonthlyPDF(reportData, month, year, institutionName, monthlyReportTemplate);
+      const pdf = await generateMonthlyPDF(reportData, month, year, institutionName, monthlyReportTemplate, getSignatures());
       const monthName = MONTHS.find(m => m.value === selectedMonth)?.label || '';
       pdf.save(`Informe_Mensual_${monthName}_${year}.pdf`);
       toast({ title: 'Informe Generado', description: `Informe de ${monthName} ${year} descargado correctamente` });
@@ -247,7 +278,7 @@ const Reports = forwardRef<HTMLDivElement>(function Reports(_props, ref) {
     try {
       const year = parseInt(selectedYear);
       const { reportData, monthlyBreakdown } = calculateAnnualData(year);
-      const pdf = await generateAnnualPDF(reportData, year, institutionName, annualReportTemplate, monthlyBreakdown);
+      const pdf = await generateAnnualPDF(reportData, year, institutionName, annualReportTemplate, monthlyBreakdown, getSignatures());
       pdf.save(`Informe_Anual_${year}.pdf`);
       toast({ title: 'Informe Generado', description: `Informe anual ${year} descargado correctamente` });
     } catch (error) {
