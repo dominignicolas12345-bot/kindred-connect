@@ -41,7 +41,7 @@ const STATUS_OPTIONS = [
 ];
 
 const CARGO_OPTIONS = [
-  { value: '', label: 'Sin cargo' },
+  { value: 'sin_cargo', label: 'Sin cargo' },
   { value: 'venerable_maestro', label: 'Venerable Maestro' },
   { value: 'primer_vigilante', label: 'Primer Vigilante' },
   { value: 'segundo_vigilante', label: 'Segundo Vigilante' },
@@ -60,7 +60,7 @@ export default function MemberForm({ member, onSuccess, onCancel }: MemberFormPr
     address: member?.address || '',
     join_date: member?.join_date || '',
     birth_date: member?.birth_date || '',
-    cargo_logial: member?.cargo_logial || '',
+    cargo_logial: member?.cargo_logial || 'sin_cargo',
   });
   const [loading, setLoading] = useState(false);
   const [loadingSettings, setLoadingSettings] = useState(true);
@@ -115,7 +115,7 @@ export default function MemberForm({ member, onSuccess, onCancel }: MemberFormPr
         address: formData.address.trim() || null,
         join_date: formData.join_date || null,
         birth_date: formData.birth_date || null,
-        cargo_logial: formData.cargo_logial || null,
+        cargo_logial: formData.cargo_logial === 'sin_cargo' ? null : formData.cargo_logial || null,
       };
 
       if (member) {
