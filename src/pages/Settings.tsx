@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { FileText, Settings2, Loader2, Upload } from 'lucide-react';
+import { Loader2, Upload } from 'lucide-react';
 import { useSettings } from '@/contexts/SettingsContext';
 import { useDataCache } from '@/hooks/useDataCache';
 import { supabase } from '@/integrations/supabase/client';
@@ -14,20 +14,18 @@ import { getFiscalYearInfo } from '@/lib/dateUtils';
 
 const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
   const { toast } = useToast();
-  const { settings, updateSettings, loading: settingsLoading } = useSettings();
-  const { summary, members, loading: cacheLoading } = useDataCache();
+  const { settings, updateSettings, loading: settingsLoading, refresh: refreshSettings } = useSettings();
+  const { summary, members, loading: cacheLoading, refresh: refreshCache } = useDataCache();
   
   const [monthlyFee, setMonthlyFee] = useState(settings.monthly_fee_base.toString());
   const [institutionName, setInstitutionName] = useState(settings.institution_name);
   const [monthlyReportTemplate, setMonthlyReportTemplate] = useState(settings.monthly_report_template);
   const [annualReportTemplate, setAnnualReportTemplate] = useState(settings.annual_report_template);
-  const [selectedTreasurerId, setSelectedTreasurerId] = useState('');
+  const [selectedTreasurerId, setSelectedTreasurerId] = useState(settings.treasurer_id || '');
   const [saving, setSaving] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [uploadingTreasurerSig, setUploadingTreasurerSig] = useState(false);
   const [uploadingVMSig, setUploadingVMSig] = useState(false);
-  const [treasurerSigPreview, setTreasurerSigPreview] = useState<string | null>(null);
-  const [vmSigPreview, setVMSigPreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const treasurerSigRef = useRef<HTMLInputElement>(null);
   const vmSigRef = useRef<HTMLInputElement>(null);
@@ -37,31 +35,21 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
     setInstitutionName(settings.institution_name);
     setMonthlyReportTemplate(settings.monthly_report_template || '');
     setAnnualReportTemplate(settings.annual_report_template || '');
-    // Load current treasurer and signatures
-    const loadExtras = async () => {
-      const { data } = await supabase.from('settings').select('treasurer_id, treasurer_signature_url, vm_signature_url').limit(1).maybeSingle();
-      if (data) {
-        setSelectedTreasurerId((data as any).treasurer_id || '');
-        setTreasurerSigPreview((data as any).treasurer_signature_url || null);
-        setVMSigPreview((data as any).vm_signature_url || null);
-      }
-    };
-    loadExtras();
+    setSelectedTreasurerId(settings.treasurer_id || '');
   }, [settings]);
 
   const { currentCalendarYear, nextCalendarYear } = getFiscalYearInfo();
   const initialBalance = summary ? summary.balance : 0;
 
-  // Get active members for treasurer selection
   const activeMembers = members.filter(m => m.status === 'activo');
 
   const handleSaveFinancial = async () => {
     setSaving(true);
     try {
       await updateSettings({ monthly_fee_base: parseFloat(monthlyFee), institution_name: institutionName });
-      toast({ title: 'Configuracion guardada', description: 'Los parametros han sido actualizados' });
+      toast({ title: 'Configuración guardada', description: 'Los parámetros han sido actualizados' });
     } catch (error) {
-      toast({ title: 'Error', description: 'No se pudieron guardar los parametros', variant: 'destructive' });
+      toast({ title: 'Error', description: 'No se pudieron guardar los parámetros', variant: 'destructive' });
     }
     setSaving(false);
   };
@@ -80,17 +68,15 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
   const handleSaveTreasurer = async () => {
     setSaving(true);
     try {
-      // First remove old treasurer flag
+      // Remove old treasurer flag
       await supabase.from('members').update({ is_treasurer: false }).eq('is_treasurer', true);
       // Set new treasurer
       if (selectedTreasurerId) {
         await supabase.from('members').update({ is_treasurer: true }).eq('id', selectedTreasurerId);
       }
-      // Save to settings
-      await supabase.from('settings').update({ 
-        treasurer_id: selectedTreasurerId || null, 
-        updated_at: new Date().toISOString() 
-      } as any).eq('id', settings.id);
+      // Save treasurer_id to settings context (persists in DB)
+      await updateSettings({ treasurer_id: selectedTreasurerId || null });
+      await refreshCache();
       toast({ title: 'Tesorero actualizado' });
     } catch (error: any) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
@@ -112,8 +98,9 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
       const { error: uploadError } = await supabase.storage.from('logos').upload(fileName, file, { upsert: true });
       if (uploadError) throw uploadError;
       const { data: urlData } = supabase.storage.from('logos').getPublicUrl(fileName);
-      await supabase.from('settings').update({ logo_url: urlData.publicUrl, updated_at: new Date().toISOString() } as any).eq('id', settings.id);
-      toast({ title: 'Logo actualizado' });
+      // Save through context so Layout updates immediately
+      await updateSettings({ logo_url: urlData.publicUrl });
+      toast({ title: 'Logo actualizado', description: 'El logo se ha actualizado en la barra lateral y los PDFs' });
     } catch (error: any) {
       toast({ title: 'Error', description: error.message || 'No se pudo subir el logo', variant: 'destructive' });
     } finally {
@@ -130,13 +117,7 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
       return;
     }
     const setUploading = type === 'treasurer' ? setUploadingTreasurerSig : setUploadingVMSig;
-    const setPreview = type === 'treasurer' ? setTreasurerSigPreview : setVMSigPreview;
     setUploading(true);
-    
-    // Show preview
-    const reader = new FileReader();
-    reader.onload = (ev) => setPreview(ev.target?.result as string);
-    reader.readAsDataURL(file);
 
     try {
       const fileExt = file.name.split('.').pop();
@@ -145,8 +126,8 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
       if (uploadError) throw uploadError;
       const { data: urlData } = supabase.storage.from('signatures').getPublicUrl(fileName);
       const field = type === 'treasurer' ? 'treasurer_signature_url' : 'vm_signature_url';
-      await supabase.from('settings').update({ [field]: urlData.publicUrl, updated_at: new Date().toISOString() } as any).eq('id', settings.id);
-      setPreview(urlData.publicUrl);
+      // Save through context so it persists
+      await updateSettings({ [field]: urlData.publicUrl } as any);
       toast({ title: `Firma ${type === 'treasurer' ? 'del Tesorero' : 'del V.M.'} actualizada` });
     } catch (error: any) {
       toast({ title: 'Error', description: error.message || 'No se pudo subir la firma', variant: 'destructive' });
@@ -162,20 +143,20 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
   return (
     <div ref={ref} className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Configuracion</h1>
-        <p className="text-muted-foreground mt-1">Parametros de la aplicacion</p>
+        <h1 className="text-3xl font-bold">Configuración</h1>
+        <p className="text-muted-foreground mt-1">Parámetros de la aplicación</p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Parametros Generales */}
+        {/* Parámetros Generales */}
         <Card>
           <CardHeader>
-            <CardTitle>Parametros Generales</CardTitle>
-            <CardDescription>Configuracion institucional y financiera</CardDescription>
+            <CardTitle>Parámetros Generales</CardTitle>
+            <CardDescription>Configuración institucional y financiera</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="institution-name">Nombre de la Institucion</Label>
+              <Label htmlFor="institution-name">Nombre de la Institución</Label>
               <Input id="institution-name" value={institutionName} onChange={e => setInstitutionName(e.target.value)} placeholder="Nombre de la logia" />
             </div>
             <div className="space-y-2">
@@ -184,7 +165,7 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
               <p className="text-xs text-muted-foreground">Valor por defecto de la cuota mensual</p>
             </div>
             <Button onClick={handleSaveFinancial} className="w-full" disabled={saving}>
-              {saving ? 'Guardando...' : 'Guardar Parametros'}
+              {saving ? 'Guardando...' : 'Guardar Parámetros'}
             </Button>
           </CardContent>
         </Card>
@@ -193,13 +174,13 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
         <Card>
           <CardHeader>
             <CardTitle>Logo Institucional</CardTitle>
-            <CardDescription>Reemplaza el logo por defecto. Visible en menu lateral y PDFs</CardDescription>
+            <CardDescription>Reemplaza el logo por defecto. Visible en menú lateral y PDFs</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center gap-4">
               <div className="w-20 h-20 rounded-lg border bg-muted/50 flex items-center justify-center overflow-hidden">
                 <img 
-                  src={(settings as any).logo_url || '/placeholder.svg'} 
+                  src={settings.logo_url || '/placeholder.svg'} 
                   alt="Logo actual" 
                   className="max-w-full max-h-full object-contain"
                   onError={(e) => { (e.target as HTMLImageElement).src = '/placeholder.svg'; }}
@@ -234,7 +215,7 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">Este miembro aparecera como firmante en recibos, informes y comunicados</p>
+            <p className="text-xs text-muted-foreground">Este miembro aparecerá como firmante en recibos, informes y comunicados</p>
           </div>
           <Button onClick={handleSaveTreasurer} className="w-full" disabled={saving}>
             {saving ? 'Guardando...' : 'Guardar Tesorero'}
@@ -242,11 +223,11 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
         </CardContent>
       </Card>
 
-      {/* Firmas Electronicas */}
+      {/* Firmas Electrónicas */}
       <Card>
         <CardHeader>
-          <CardTitle>Firmas Electronicas</CardTitle>
-          <CardDescription>Firmas que se usaran automaticamente en recibos, informes, comunicados y documentos de cierre</CardDescription>
+          <CardTitle>Firmas Electrónicas</CardTitle>
+          <CardDescription>Firmas que se usarán automáticamente en recibos, informes, comunicados y documentos de cierre</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-6 md:grid-cols-2">
@@ -254,8 +235,8 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
             <div className="space-y-3">
               <Label>Firma del Tesorero</Label>
               <div className="w-full h-24 rounded-lg border bg-muted/50 flex items-center justify-center overflow-hidden">
-                {treasurerSigPreview ? (
-                  <img src={treasurerSigPreview} alt="Firma Tesorero" className="max-w-full max-h-full object-contain" />
+                {settings.treasurer_signature_url ? (
+                  <img src={settings.treasurer_signature_url} alt="Firma Tesorero" className="max-w-full max-h-full object-contain" />
                 ) : (
                   <span className="text-xs text-muted-foreground">Sin firma cargada</span>
                 )}
@@ -269,8 +250,8 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
             <div className="space-y-3">
               <Label>Firma del Venerable Maestro</Label>
               <div className="w-full h-24 rounded-lg border bg-muted/50 flex items-center justify-center overflow-hidden">
-                {vmSigPreview ? (
-                  <img src={vmSigPreview} alt="Firma V.M." className="max-w-full max-h-full object-contain" />
+                {settings.vm_signature_url ? (
+                  <img src={settings.vm_signature_url} alt="Firma V.M." className="max-w-full max-h-full object-contain" />
                 ) : (
                   <span className="text-xs text-muted-foreground">Sin firma cargada</span>
                 )}
@@ -281,7 +262,7 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
               </Button>
             </div>
           </div>
-          <p className="text-xs text-muted-foreground mt-3">Las firmas se aplicaran automaticamente en todos los documentos generados (recibos, informes, comunicados, documentos de cierre)</p>
+          <p className="text-xs text-muted-foreground mt-3">Las firmas se aplicarán automáticamente en todos los documentos generados</p>
         </CardContent>
       </Card>
 
@@ -289,7 +270,7 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
       <Card>
         <CardHeader>
           <CardTitle>Periodo Logial</CardTitle>
-          <CardDescription>Informacion del periodo logial actual</CardDescription>
+          <CardDescription>Información del periodo logial actual</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="rounded-lg border p-4 bg-muted/50 space-y-3">
@@ -312,7 +293,7 @@ const Settings = forwardRef<HTMLDivElement>(function Settings(_props, ref) {
               </span>
             </div>
             <p className="text-xs text-muted-foreground">
-              El saldo inicial se calcula automaticamente como: Total ingresos - Total gastos
+              El saldo inicial se calcula automáticamente como: Total ingresos - Total gastos
             </p>
           </div>
         </CardContent>

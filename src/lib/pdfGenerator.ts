@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import logoImg from '@/assets/logo-institucional.png';
+import defaultLogoImg from '@/assets/logo-institucional.png';
 
 interface ReportData {
   totalMonthlyIncome: number;
@@ -47,6 +47,7 @@ interface SignatureData {
   vmName?: string;
   vmDegree?: string;
   vmSignatureUrl?: string | null;
+  logoUrl?: string | null;
 }
 
 interface CollectionLetterData {
@@ -64,6 +65,7 @@ interface CollectionLetterData {
   vmName?: string;
   vmDegree?: string;
   vmSignatureUrl?: string | null;
+  logoUrl?: string | null;
 }
 
 const CATEGORIES: Record<string, string> = {
@@ -82,12 +84,12 @@ const MONTHS = [
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
 ];
 
-// Helper function to add logo to PDF
-async function addLogoToPDF(doc: jsPDF): Promise<void> {
+// Helper function to add logo to PDF - accepts optional dynamic URL
+async function addLogoToPDF(doc: jsPDF, logoUrl?: string | null): Promise<void> {
   return new Promise((resolve) => {
     const img = new Image();
+    img.crossOrigin = 'anonymous';
     img.onload = () => {
-      // Place logo in top-left corner with proper proportions
       const maxWidth = 30;
       const maxHeight = 20;
       const ratio = Math.min(maxWidth / img.width, maxHeight / img.height);
@@ -97,10 +99,23 @@ async function addLogoToPDF(doc: jsPDF): Promise<void> {
       resolve();
     };
     img.onerror = () => {
-      // If logo fails to load, continue without it
-      resolve();
+      if (logoUrl) {
+        // Fallback to default static logo
+        const fallback = new Image();
+        fallback.onload = () => {
+          const maxWidth = 30;
+          const maxHeight = 20;
+          const ratio = Math.min(maxWidth / fallback.width, maxHeight / fallback.height);
+          doc.addImage(fallback, 'PNG', 15, 10, fallback.width * ratio, fallback.height * ratio);
+          resolve();
+        };
+        fallback.onerror = () => resolve();
+        fallback.src = defaultLogoImg;
+      } else {
+        resolve();
+      }
     };
-    img.src = logoImg;
+    img.src = logoUrl || defaultLogoImg;
   });
 }
 
@@ -123,7 +138,7 @@ async function addSignaturesToPDF(doc: jsPDF, yPos: number, signatures: Signatur
   // Ensure enough space for signatures
   if (yPos > pageHeight - 60) {
     doc.addPage();
-    await addLogoToPDF(doc);
+    await addLogoToPDF(doc, signatures.logoUrl);
     yPos = 40;
   }
 
@@ -196,8 +211,9 @@ export async function generateMonthlyPDF(
   const pageWidth = doc.internal.pageSize.getWidth();
   const monthName = MONTHS[month - 1];
   
-  // Add logo
-  await addLogoToPDF(doc);
+  // Add logo (use dynamic URL from signatures if available)
+  const logoUrl = signatures?.logoUrl;
+  await addLogoToPDF(doc, logoUrl);
   
   let yPos = 35;
 
@@ -286,7 +302,7 @@ export async function generateMonthlyPDF(
   // Check if we need a new page
   if (yPos > 200) {
     doc.addPage();
-    await addLogoToPDF(doc);
+    await addLogoToPDF(doc, logoUrl);
     yPos = 40;
   }
 
@@ -328,7 +344,7 @@ export async function generateMonthlyPDF(
   // RESUMEN FINANCIERO
   if (yPos > 230) {
     doc.addPage();
-    await addLogoToPDF(doc);
+    await addLogoToPDF(doc, logoUrl);
     yPos = 40;
   }
 
@@ -392,9 +408,9 @@ export async function generateAnnualPDF(
 ): Promise<jsPDF> {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
-  
   // Add logo
-  await addLogoToPDF(doc);
+  const logoUrl = signatures?.logoUrl;
+  await addLogoToPDF(doc, logoUrl);
   
   let yPos = 35;
 
@@ -487,7 +503,7 @@ export async function generateAnnualPDF(
   // Check if we need a new page
   if (yPos > 200) {
     doc.addPage();
-    await addLogoToPDF(doc);
+    await addLogoToPDF(doc, logoUrl);
     yPos = 40;
   }
 
@@ -519,7 +535,7 @@ export async function generateAnnualPDF(
   // Check if we need a new page
   if (yPos > 220) {
     doc.addPage();
-    await addLogoToPDF(doc);
+    await addLogoToPDF(doc, logoUrl);
     yPos = 40;
   }
 
@@ -587,7 +603,7 @@ export async function generateCollectionLetterPDF(data: CollectionLetterData): P
   const lineHeight = 5; // Compact line height for formal letter
   
   // Add logo (smaller for formal letter)
-  await addLogoToPDF(doc);
+  await addLogoToPDF(doc, data.logoUrl);
   
   let yPos = 50;
   
