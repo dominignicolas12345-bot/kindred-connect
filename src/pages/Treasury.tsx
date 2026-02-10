@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
-import { Edit2, Zap, CreditCard, Search } from 'lucide-react';
+import { Edit2, Zap, CreditCard, Search, Download, MessageCircle } from 'lucide-react';
 import { ReceiptUpload } from '@/components/ui/receipt-upload';
 import AdvancePaymentDialog from '@/components/treasury/AdvancePaymentDialog';
 import { upsertCachedMonthlyPayment } from '@/hooks/useDataCache';
@@ -20,12 +20,15 @@ import { getSystemDateString, getSystemYear, getSystemMonth, getFiscalYearInfo, 
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { generatePaymentReceipt, generateReceiptNumber, downloadReceipt, getReceiptWhatsAppMessage } from '@/lib/receiptGenerator';
+import { openWhatsApp } from '@/lib/whatsappUtils';
 
 interface Member {
   id: string;
   full_name: string;
   degree: string | null;
   treasury_amount: number | null;
+  phone?: string | null;
 }
 
 interface Payment {
@@ -76,6 +79,9 @@ const Treasury = forwardRef<HTMLDivElement>(function Treasury(_props, ref) {
     memberId: string; memberName: string; memberMonthlyAmount: number;
   } | null>(null);
   const [processingAdvancePayment, setProcessingAdvancePayment] = useState(false);
+  const [lastReceiptData, setLastReceiptData] = useState<{
+    memberName: string; memberPhone?: string | null; concept: string; totalAmount: number; amountPaid: number; paymentDate: string; remaining?: number;
+  } | null>(null);
 
   const { toast } = useToast();
   const { settings } = useSettings();
@@ -95,7 +101,7 @@ const Treasury = forwardRef<HTMLDivElement>(function Treasury(_props, ref) {
   const loadData = useCallback(async () => {
     setLoading(true);
     const [membersResult, paymentsResult] = await Promise.all([
-      supabase.from('members').select('id, full_name, degree, treasury_amount').eq('status', 'activo').order('full_name'),
+      supabase.from('members').select('id, full_name, degree, treasury_amount, phone').eq('status', 'activo').order('full_name'),
       supabase.from('monthly_payments').select('*')
     ]);
     if (membersResult.data) setMembers(membersResult.data);
@@ -192,11 +198,13 @@ const Treasury = forwardRef<HTMLDivElement>(function Treasury(_props, ref) {
       let receiptUrl = selectedPayment.payment?.receipt_url || null;
       if (receiptFile) receiptUrl = await uploadReceipt(receiptFile, 'monthly');
 
+      const parsedAmount = parseFloat(amount) || 0;
+      const memberFee = members.find(m => m.id === selectedPayment.memberId)?.treasury_amount || settings.monthly_fee_base;
       const paymentData = {
         member_id: selectedPayment.memberId,
         month: selectedPayment.month,
         year: selectedPayment.year,
-        amount: parseFloat(amount) || 0,
+        amount: parsedAmount,
         paid_at: paymentDate || null,
         receipt_url: receiptUrl,
         payment_type: 'regular' as const,
@@ -224,6 +232,20 @@ const Treasury = forwardRef<HTMLDivElement>(function Treasury(_props, ref) {
       }
 
       if (error) throw error;
+
+      const member = members.find(m => m.id === selectedPayment.memberId);
+      const remaining = parsedAmount < memberFee ? memberFee - parsedAmount : 0;
+      const monthName = MONTH_NAMES[(selectedPayment.month ?? 1) - 1];
+      setLastReceiptData({
+        memberName: selectedPayment.memberName,
+        memberPhone: member?.phone,
+        concept: `Cuota mensual - ${monthName} ${selectedPayment.year}`,
+        totalAmount: memberFee,
+        amountPaid: parsedAmount,
+        paymentDate: paymentDate || getSystemPaymentDate(),
+        remaining,
+      });
+
       toast({ title: 'Pago guardado correctamente' });
       setSelectedPayment(null);
     } catch (error: any) {
@@ -232,6 +254,36 @@ const Treasury = forwardRef<HTMLDivElement>(function Treasury(_props, ref) {
     } finally {
       setUploading(false);
     }
+  };
+
+  const handleDownloadReceipt = async () => {
+    if (!lastReceiptData) return;
+    const doc = await generatePaymentReceipt({
+      receiptNumber: generateReceiptNumber(),
+      memberName: lastReceiptData.memberName,
+      concept: lastReceiptData.concept,
+      totalAmount: lastReceiptData.totalAmount,
+      amountPaid: lastReceiptData.amountPaid,
+      paymentDate: lastReceiptData.paymentDate,
+      institutionName: settings.institution_name,
+      logoUrl: settings.logo_url,
+      remainingBalance: lastReceiptData.remaining,
+    });
+    downloadReceipt(doc, lastReceiptData.memberName);
+  };
+
+  const handleSendReceiptWhatsApp = () => {
+    if (!lastReceiptData?.memberPhone) {
+      toast({ title: 'Sin teléfono', description: 'Este miembro no tiene número de teléfono registrado', variant: 'destructive' });
+      return;
+    }
+    const msg = getReceiptWhatsAppMessage(
+      lastReceiptData.memberName,
+      lastReceiptData.concept,
+      lastReceiptData.amountPaid,
+      lastReceiptData.remaining,
+    );
+    openWhatsApp(lastReceiptData.memberPhone, msg);
   };
 
   const openQuickPay = (member: Member) => {
@@ -453,18 +505,19 @@ const Treasury = forwardRef<HTMLDivElement>(function Treasury(_props, ref) {
                               const pendingAmount = isPartial ? (memberFee - payment.amount) : 0;
 
                               return (
-                                <TooltipProvider key={monthIndex}>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <TableCell
-                                        className={cn(
-                                          'text-center relative group cursor-pointer transition-colors min-w-[85px] py-3',
-                                          'hover:bg-muted',
-                                          isPPBenefit && 'bg-accent/20',
-                                          isPartial && 'bg-destructive/15'
-                                        )}
-                                        onClick={() => handleCellClick(member, monthIndex)}
-                                      >
+                                <TableCell
+                                  key={monthIndex}
+                                  className={cn(
+                                    'text-center relative group cursor-pointer transition-colors min-w-[85px] py-3',
+                                    'hover:bg-muted',
+                                    isPPBenefit && 'bg-accent/20',
+                                    isPartial && 'bg-destructive/15'
+                                  )}
+                                  onClick={() => handleCellClick(member, monthIndex)}
+                                >
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
                                         <div className="flex items-center justify-center gap-1">
                                           <span className={cn(
                                             'text-sm',
@@ -476,15 +529,15 @@ const Treasury = forwardRef<HTMLDivElement>(function Treasury(_props, ref) {
                                           </span>
                                           <Edit2 className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground" />
                                         </div>
-                                      </TableCell>
-                                    </TooltipTrigger>
-                                    {isPartial && (
-                                      <TooltipContent>
-                                        <p className="text-sm">Saldo pendiente para completar cuota: <strong>${pendingAmount.toFixed(2)}</strong></p>
-                                      </TooltipContent>
-                                    )}
-                                  </Tooltip>
-                                </TooltipProvider>
+                                      </TooltipTrigger>
+                                      {isPartial && (
+                                        <TooltipContent side="top" className="z-50">
+                                          <p className="text-sm">Saldo pendiente para completar cuota: <strong>${pendingAmount.toFixed(2)}</strong></p>
+                                        </TooltipContent>
+                                      )}
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                </TableCell>
                               );
                             })}
                             <TableCell className="text-center bg-background py-3">
@@ -602,6 +655,39 @@ const Treasury = forwardRef<HTMLDivElement>(function Treasury(_props, ref) {
           currentYear={currentYear} onSubmit={handleAdvancePayment} processing={processingAdvancePayment}
         />
       )}
+
+      {/* Receipt Dialog */}
+      <Dialog open={!!lastReceiptData} onOpenChange={() => setLastReceiptData(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Recibo de Pago</DialogTitle>
+            <DialogDescription>
+              Pago registrado para {lastReceiptData?.memberName}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="p-3 bg-muted/50 rounded-md text-sm space-y-1">
+              <p><strong>Concepto:</strong> {lastReceiptData?.concept}</p>
+              <p><strong>Valor cuota:</strong> ${lastReceiptData?.totalAmount?.toFixed(2)}</p>
+              <p><strong>Monto pagado:</strong> ${lastReceiptData?.amountPaid?.toFixed(2)}</p>
+              {(lastReceiptData?.remaining ?? 0) > 0 && (
+                <p className="text-destructive"><strong>Saldo pendiente:</strong> ${lastReceiptData?.remaining?.toFixed(2)}</p>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button className="flex-1" onClick={handleDownloadReceipt}>
+                <Download className="mr-2 h-4 w-4" /> Descargar PDF
+              </Button>
+              <Button variant="outline" className="flex-1" onClick={handleSendReceiptWhatsApp}>
+                <MessageCircle className="mr-2 h-4 w-4" /> WhatsApp
+              </Button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setLastReceiptData(null)}>Cerrar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 });
