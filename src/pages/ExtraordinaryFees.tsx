@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef, forwardRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
-import { Plus, Eye, Pencil, Trash2, ArrowLeft } from 'lucide-react';
+import { Plus, Eye, Pencil, Trash2, ArrowLeft, Download, MessageCircle } from 'lucide-react';
 import { ReceiptUpload } from '@/components/ui/receipt-upload';
 import { Card, CardContent } from '@/components/ui/card';
 import { 
@@ -19,6 +19,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import { getSystemDateString } from '@/lib/dateUtils';
+import { useSettings } from '@/contexts/SettingsContext';
+import { generatePaymentReceipt, generateReceiptNumber, downloadReceipt, getReceiptWhatsAppMessage } from '@/lib/receiptGenerator';
+import { openWhatsApp } from '@/lib/whatsappUtils';
 interface ExtraordinaryIncome {
   id: string;
   name: string;
@@ -44,6 +47,7 @@ type Member = {
   id: string;
   full_name: string;
   degree: string;
+  phone?: string | null;
 };
 
 // No cache - always fetch fresh data to avoid stale state issues
@@ -65,7 +69,11 @@ const ExtraordinaryFees = forwardRef<HTMLDivElement>(function ExtraordinaryFees(
   const [editReceiptFile, setEditReceiptFile] = useState<File | null>(null);
   const [uploadingReceipt, setUploadingReceipt] = useState(false);
   const { toast } = useToast();
+  const { settings } = useSettings();
   const loadedRef = useRef(false);
+  const [lastReceiptData, setLastReceiptData] = useState<{
+    memberName: string; memberPhone?: string | null; concept: string; totalAmount: number; amountPaid: number; paymentDate: string; remaining?: number;
+  } | null>(null);
 
   const [formData, setFormData] = useState<{
     name: string;
@@ -96,7 +104,7 @@ const ExtraordinaryFees = forwardRef<HTMLDivElement>(function ExtraordinaryFees(
     const [incomesResult, paymentsResult, membersResult] = await Promise.all([
       supabase.from('extraordinary_fees').select('*').order('created_at', { ascending: false }),
       supabase.from('extraordinary_payments').select('*').order('created_at', { ascending: false }),
-      supabase.from('members').select('id, full_name, degree').in('status', ['activo', 'active']).order('full_name')
+      supabase.from('members').select('id, full_name, degree, phone').in('status', ['activo', 'active']).order('full_name')
     ]);
 
     if (incomesResult.data) {
@@ -294,11 +302,7 @@ const ExtraordinaryFees = forwardRef<HTMLDivElement>(function ExtraordinaryFees(
       return;
     }
 
-    // MANDATORY: Receipt is required
-    if (!receiptFile) {
-      toast({ title: 'Error', description: 'Debe adjuntar un comprobante de pago (JPG, PNG o PDF)', variant: 'destructive' });
-      return;
-    }
+    // Receipt is optional
 
     // Check if member already paid for this income
     const existingPayment = payments.find(
@@ -311,27 +315,31 @@ const ExtraordinaryFees = forwardRef<HTMLDivElement>(function ExtraordinaryFees(
 
     setUploadingReceipt(true);
     try {
-      // Upload receipt to storage
-      const fileExt = receiptFile.name.split('.').pop();
-      const fileName = `extraordinary/${detailView.id}/${selectedMemberId}_${Date.now()}.${fileExt}`;
-      
-      const { error: uploadError } = await supabase.storage
-        .from('receipts')
-        .upload(fileName, receiptFile);
+      let receiptUrl: string | null = null;
 
-      if (uploadError) throw uploadError;
+      if (receiptFile) {
+        const fileExt = receiptFile.name.split('.').pop();
+        const fileName = `extraordinary/${detailView.id}/${selectedMemberId}_${Date.now()}.${fileExt}`;
+        
+        const { error: uploadError } = await supabase.storage
+          .from('receipts')
+          .upload(fileName, receiptFile);
 
-      // Get public URL
-      const { data: urlData } = supabase.storage
-        .from('receipts')
-        .getPublicUrl(fileName);
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from('receipts')
+          .getPublicUrl(fileName);
+
+        receiptUrl = urlData.publicUrl;
+      }
 
       const paymentData = {
         extraordinary_fee_id: detailView.id,
         member_id: selectedMemberId,
         amount_paid: amount,
         payment_date: paymentDate,
-        receipt_url: urlData.publicUrl,
+        receipt_url: receiptUrl,
       };
 
       const { data: newPayment, error } = await supabase
@@ -344,7 +352,19 @@ const ExtraordinaryFees = forwardRef<HTMLDivElement>(function ExtraordinaryFees(
         upsertCachedExtraordinaryPayment(newPayment as any);
       }
 
-      toast({ title: 'Éxito', description: 'Pago registrado con comprobante' });
+      const member = members.find(m => m.id === selectedMemberId);
+      const remaining = amount < Number(detailView.amount_per_member) ? Number(detailView.amount_per_member) - amount : 0;
+      setLastReceiptData({
+        memberName: member?.full_name || '',
+        memberPhone: member?.phone,
+        concept: `Cuota extraordinaria - ${detailView.name}`,
+        totalAmount: Number(detailView.amount_per_member),
+        amountPaid: amount,
+        paymentDate: paymentDate,
+        remaining,
+      });
+
+      toast({ title: 'Éxito', description: 'Pago registrado' });
       setNewPaymentDialog(false);
       setReceiptFile(null);
       loadData();
@@ -416,6 +436,36 @@ const ExtraordinaryFees = forwardRef<HTMLDivElement>(function ExtraordinaryFees(
     } finally {
       setUploadingReceipt(false);
     }
+  };
+
+  const handleDownloadReceipt = async () => {
+    if (!lastReceiptData) return;
+    const doc = await generatePaymentReceipt({
+      receiptNumber: generateReceiptNumber(),
+      memberName: lastReceiptData.memberName,
+      concept: lastReceiptData.concept,
+      totalAmount: lastReceiptData.totalAmount,
+      amountPaid: lastReceiptData.amountPaid,
+      paymentDate: lastReceiptData.paymentDate,
+      institutionName: settings.institution_name,
+      logoUrl: settings.logo_url,
+      remainingBalance: lastReceiptData.remaining,
+    });
+    downloadReceipt(doc, lastReceiptData.memberName);
+  };
+
+  const handleSendReceiptWhatsApp = () => {
+    if (!lastReceiptData?.memberPhone) {
+      toast({ title: 'Sin teléfono', description: 'Este miembro no tiene número de teléfono registrado', variant: 'destructive' });
+      return;
+    }
+    const msg = getReceiptWhatsAppMessage(
+      lastReceiptData.memberName,
+      lastReceiptData.concept,
+      lastReceiptData.amountPaid,
+      lastReceiptData.remaining,
+    );
+    openWhatsApp(lastReceiptData.memberPhone, msg);
   };
 
   const handleDeletePayment = async (paymentId: string) => {
@@ -610,7 +660,6 @@ const ExtraordinaryFees = forwardRef<HTMLDivElement>(function ExtraordinaryFees(
               <ReceiptUpload
                 onFileSelect={setReceiptFile}
                 label="Comprobante de pago"
-                required
               />
             </div>
 
@@ -876,6 +925,39 @@ const ExtraordinaryFees = forwardRef<HTMLDivElement>(function ExtraordinaryFees(
             <Button onClick={handleSubmit}>
               {editingIncome ? 'Guardar cambios' : 'Crear cuota'}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Receipt Dialog */}
+      <Dialog open={!!lastReceiptData} onOpenChange={() => setLastReceiptData(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Recibo de Pago</DialogTitle>
+            <DialogDescription>
+              Pago registrado para {lastReceiptData?.memberName}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="p-3 bg-muted/50 rounded-md text-sm space-y-1">
+              <p><strong>Concepto:</strong> {lastReceiptData?.concept}</p>
+              <p><strong>Valor cuota:</strong> ${lastReceiptData?.totalAmount?.toFixed(2)}</p>
+              <p><strong>Monto pagado:</strong> ${lastReceiptData?.amountPaid?.toFixed(2)}</p>
+              {(lastReceiptData?.remaining ?? 0) > 0 && (
+                <p className="text-destructive"><strong>Saldo pendiente:</strong> ${lastReceiptData?.remaining?.toFixed(2)}</p>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button className="flex-1" onClick={handleDownloadReceipt}>
+                <Download className="mr-2 h-4 w-4" /> Descargar PDF
+              </Button>
+              <Button variant="outline" className="flex-1" onClick={handleSendReceiptWhatsApp}>
+                <MessageCircle className="mr-2 h-4 w-4" /> WhatsApp
+              </Button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setLastReceiptData(null)}>Cerrar</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
