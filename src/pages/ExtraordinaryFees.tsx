@@ -20,7 +20,7 @@ import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import { getSystemDateString } from '@/lib/dateUtils';
 import { useSettings } from '@/contexts/SettingsContext';
-import { generatePaymentReceipt, generateReceiptNumber, downloadReceipt, getReceiptWhatsAppMessage } from '@/lib/receiptGenerator';
+import { generatePaymentReceipt, getNextReceiptNumber, downloadReceipt, getReceiptWhatsAppMessage } from '@/lib/receiptGenerator';
 import { openWhatsApp } from '@/lib/whatsappUtils';
 interface ExtraordinaryIncome {
   id: string;
@@ -72,7 +72,7 @@ const ExtraordinaryFees = forwardRef<HTMLDivElement>(function ExtraordinaryFees(
   const { settings } = useSettings();
   const loadedRef = useRef(false);
   const [lastReceiptData, setLastReceiptData] = useState<{
-    memberName: string; memberPhone?: string | null; concept: string; totalAmount: number; amountPaid: number; paymentDate: string; remaining?: number;
+    memberName: string; memberPhone?: string | null; memberDegree?: string; concept: string; totalAmount: number; amountPaid: number; paymentDate: string; remaining?: number;
   } | null>(null);
 
   const [formData, setFormData] = useState<{
@@ -357,7 +357,8 @@ const ExtraordinaryFees = forwardRef<HTMLDivElement>(function ExtraordinaryFees(
       setLastReceiptData({
         memberName: member?.full_name || '',
         memberPhone: member?.phone,
-        concept: `Cuota extraordinaria - ${detailView.name}`,
+        memberDegree: member?.degree || undefined,
+        concept: `Pago de cuota extraordinaria – ${detailView.name}`,
         totalAmount: Number(detailView.amount_per_member),
         amountPaid: amount,
         paymentDate: paymentDate,
@@ -438,11 +439,32 @@ const ExtraordinaryFees = forwardRef<HTMLDivElement>(function ExtraordinaryFees(
     }
   };
 
+  const getTreasurerAndVM = useCallback(async () => {
+    let treasurerName = 'Tesorero';
+    let vmName = 'Venerable Maestro';
+    
+    if (settings.treasurer_id) {
+      const t = members.find(m => m.id === settings.treasurer_id);
+      if (t) treasurerName = t.full_name;
+    }
+    
+    const { data: vmData } = await supabase.from('members').select('full_name').eq('cargo_logial', 'venerable_maestro').limit(1).maybeSingle();
+    if (vmData) vmName = vmData.full_name;
+    
+    return {
+      treasurer: { name: treasurerName, cargo: 'Tesorero', signatureUrl: settings.treasurer_signature_url },
+      venerableMaestro: { name: vmName, cargo: 'Venerable Maestro', signatureUrl: settings.vm_signature_url },
+    };
+  }, [settings, members]);
+
   const handleDownloadReceipt = async () => {
     if (!lastReceiptData) return;
+    const receiptNumber = await getNextReceiptNumber('extraordinary');
+    const sigs = await getTreasurerAndVM();
     const doc = await generatePaymentReceipt({
-      receiptNumber: generateReceiptNumber(),
+      receiptNumber,
       memberName: lastReceiptData.memberName,
+      memberDegree: lastReceiptData.memberDegree,
       concept: lastReceiptData.concept,
       totalAmount: lastReceiptData.totalAmount,
       amountPaid: lastReceiptData.amountPaid,
@@ -450,6 +472,8 @@ const ExtraordinaryFees = forwardRef<HTMLDivElement>(function ExtraordinaryFees(
       institutionName: settings.institution_name,
       logoUrl: settings.logo_url,
       remainingBalance: lastReceiptData.remaining,
+      treasurer: sigs.treasurer,
+      venerableMaestro: sigs.venerableMaestro,
     });
     downloadReceipt(doc, lastReceiptData.memberName);
   };

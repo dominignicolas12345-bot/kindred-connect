@@ -265,6 +265,30 @@ export type Database = {
           },
         ]
       }
+      receipt_sequences: {
+        Row: {
+          created_at: string
+          id: string
+          last_number: number
+          module: string
+          prefix: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          last_number?: number
+          module: string
+          prefix: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          last_number?: number
+          module?: string
+          prefix?: string
+        }
+        Relationships: []
+      }
       settings: {
         Row: {
           annual_report_template: string | null
@@ -333,7 +357,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      get_next_receipt_number: { Args: { p_module: string }; Returns: string }
     }
     Enums: {
       [_ in never]: never
