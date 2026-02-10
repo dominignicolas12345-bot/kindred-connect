@@ -10,91 +10,132 @@ import { getFiscalYearInfo, MONTH_NAMES } from '@/lib/dateUtils';
 import { generateCollectionLetterPDF } from '@/lib/pdfGenerator';
 import { getFormattedSystemDate } from '@/lib/dateUtils';
 import { supabase } from '@/integrations/supabase/client';
-
 interface MemberDebt {
   member: Member;
-  treasuryPending: Array<{ month: number; year: number; monthName: string; amount: number; paid: number }>;
+  treasuryPending: Array<{
+    month: number;
+    year: number;
+    monthName: string;
+    amount: number;
+    paid: number;
+  }>;
   treasuryTotal: number;
-  extraordinaryPending: Array<{ feeName: string; amount: number; paid: number; pending: number }>;
+  extraordinaryPending: Array<{
+    feeName: string;
+    amount: number;
+    paid: number;
+    pending: number;
+  }>;
   extraordinaryTotal: number;
   degreeFeesPending: number;
   grandTotal: number;
 }
-
 const GRADE_LABELS: Record<string, string> = {
-  aprendiz: 'Apr.', companero: 'Comp.', maestro: 'M.',
+  aprendiz: 'Apr.',
+  companero: 'Comp.',
+  maestro: 'M.'
 };
-
 export default function CuentasPorCobrar() {
   const [selectedMember, setSelectedMember] = useState<MemberDebt | null>(null);
-  const { activeMembers, monthlyPayments, extraordinaryIncomes, extraordinaryPayments, members } = useDataCache();
-  const { settings } = useSettings();
-  const { currentCalendarYear, nextCalendarYear } = getFiscalYearInfo();
+  const {
+    activeMembers,
+    monthlyPayments,
+    extraordinaryIncomes,
+    extraordinaryPayments,
+    members
+  } = useDataCache();
+  const {
+    settings
+  } = useSettings();
+  const {
+    currentCalendarYear,
+    nextCalendarYear
+  } = getFiscalYearInfo();
   const treasurer = useDataCache().treasurer;
 
   // Fetch signature data
-  const [sigData, setSigData] = useState<{ treasurerSigUrl: string | null; vmSigUrl: string | null }>({ treasurerSigUrl: null, vmSigUrl: null });
+  const [sigData, setSigData] = useState<{
+    treasurerSigUrl: string | null;
+    vmSigUrl: string | null;
+  }>({
+    treasurerSigUrl: null,
+    vmSigUrl: null
+  });
   const vmMember = members.find(m => m.cargo_logial === 'venerable_maestro') || null;
-
   useEffect(() => {
     const load = async () => {
-      const { data } = await supabase.from('settings').select('treasurer_signature_url, vm_signature_url').limit(1).maybeSingle();
+      const {
+        data
+      } = await supabase.from('settings').select('treasurer_signature_url, vm_signature_url').limit(1).maybeSingle();
       setSigData({
         treasurerSigUrl: (data as any)?.treasurer_signature_url || null,
-        vmSigUrl: (data as any)?.vm_signature_url || null,
+        vmSigUrl: (data as any)?.vm_signature_url || null
       });
     };
     load();
   }, []);
-
   const memberDebts = useMemo(() => {
     const debts: MemberDebt[] = [];
-
     activeMembers.forEach(member => {
       const memberFee = member.treasury_amount || settings.monthly_fee_base;
       const treasuryPending: MemberDebt['treasuryPending'] = [];
       let treasuryTotal = 0;
-
       for (let i = 0; i < 12; i++) {
         const year = i < 6 ? currentCalendarYear : nextCalendarYear;
         const month = i < 6 ? i + 7 : i - 5;
         const payment = monthlyPayments.find(p => p.member_id === member.id && p.month === month && p.year === year);
-
         if (!payment) {
-          treasuryPending.push({ month, year, monthName: MONTH_NAMES[month - 1], amount: memberFee, paid: 0 });
+          treasuryPending.push({
+            month,
+            year,
+            monthName: MONTH_NAMES[month - 1],
+            amount: memberFee,
+            paid: 0
+          });
           treasuryTotal += memberFee;
         } else if (payment.payment_type !== 'pronto_pago_benefit' && payment.amount < memberFee) {
           const pending = memberFee - payment.amount;
-          treasuryPending.push({ month, year, monthName: MONTH_NAMES[month - 1], amount: memberFee, paid: payment.amount });
+          treasuryPending.push({
+            month,
+            year,
+            monthName: MONTH_NAMES[month - 1],
+            amount: memberFee,
+            paid: payment.amount
+          });
           treasuryTotal += pending;
         }
       }
-
       const extraordinaryPending: MemberDebt['extraordinaryPending'] = [];
       let extraordinaryTotal = 0;
-
       extraordinaryIncomes.forEach(income => {
-        const payment = extraordinaryPayments.find(
-          p => p.extraordinary_fee_id === income.id && p.member_id === member.id
-        );
+        const payment = extraordinaryPayments.find(p => p.extraordinary_fee_id === income.id && p.member_id === member.id);
         const paid = payment ? Number(payment.amount_paid) : 0;
         const pending = Number(income.amount_per_member) - paid;
         if (pending > 0) {
-          extraordinaryPending.push({ feeName: income.name, amount: Number(income.amount_per_member), paid, pending });
+          extraordinaryPending.push({
+            feeName: income.name,
+            amount: Number(income.amount_per_member),
+            paid,
+            pending
+          });
           extraordinaryTotal += pending;
         }
       });
-
       const grandTotal = treasuryTotal + extraordinaryTotal;
-
       if (grandTotal > 0) {
-        debts.push({ member, treasuryPending, treasuryTotal, extraordinaryPending, extraordinaryTotal, degreeFeesPending: 0, grandTotal });
+        debts.push({
+          member,
+          treasuryPending,
+          treasuryTotal,
+          extraordinaryPending,
+          extraordinaryTotal,
+          degreeFeesPending: 0,
+          grandTotal
+        });
       }
     });
-
     return debts.sort((a, b) => b.grandTotal - a.grandTotal);
   }, [activeMembers, monthlyPayments, extraordinaryIncomes, extraordinaryPayments, settings.monthly_fee_base, currentCalendarYear, nextCalendarYear]);
-
   const handleDownloadPDF = async (debt: MemberDebt) => {
     try {
       const pdf = await generateCollectionLetterPDF({
@@ -104,10 +145,14 @@ export default function CuentasPorCobrar() {
         monthsOverdue: debt.treasuryPending.length,
         totalOwed: debt.grandTotal,
         pendingMonths: debt.treasuryPending.map(p => ({
-          month: p.month, year: p.year, amount: p.amount - p.paid, monthName: p.monthName,
+          month: p.month,
+          year: p.year,
+          amount: p.amount - p.paid,
+          monthName: p.monthName
         })),
         extraordinaryPending: debt.extraordinaryPending.map(p => ({
-          feeName: p.feeName, pending: p.pending,
+          feeName: p.feeName,
+          pending: p.pending
         })),
         treasurerName: treasurer?.full_name || 'Tesorero',
         treasurerDegree: GRADE_LABELS[treasurer?.degree || ''] || '',
@@ -115,7 +160,7 @@ export default function CuentasPorCobrar() {
         treasurerSignatureUrl: sigData.treasurerSigUrl,
         vmName: vmMember?.full_name,
         vmDegree: GRADE_LABELS[vmMember?.degree || ''] || '',
-        vmSignatureUrl: sigData.vmSigUrl,
+        vmSignatureUrl: sigData.vmSigUrl
       });
       pdf.save(`Comunicado_Mora_${debt.member.full_name.replace(/\s+/g, '_')}.pdf`);
     } catch (error) {
@@ -127,10 +172,8 @@ export default function CuentasPorCobrar() {
   const totalTreasury = memberDebts.reduce((s, d) => s + d.treasuryTotal, 0);
   const totalExtra = memberDebts.reduce((s, d) => s + d.extraordinaryTotal, 0);
   const totalGrand = memberDebts.reduce((s, d) => s + d.grandTotal, 0);
-
   if (memberDebts.length === 0) {
-    return (
-      <Card>
+    return <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><FileWarning className="h-5 w-5" /> Cuentas por Cobrar</CardTitle>
           <CardDescription>No hay cuentas pendientes</CardDescription>
@@ -140,12 +183,9 @@ export default function CuentasPorCobrar() {
             Todos los miembros estan al dia con sus pagos.
           </p>
         </CardContent>
-      </Card>
-    );
+      </Card>;
   }
-
-  return (
-    <>
+  return <>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><FileWarning className="h-5 w-5" /> Cuentas por Cobrar / Comunicado por Mora</CardTitle>
@@ -169,24 +209,15 @@ export default function CuentasPorCobrar() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {memberDebts.map(debt => (
-                  <TableRow key={debt.member.id}>
+                {memberDebts.map(debt => <TableRow key={debt.member.id}>
                     <TableCell className="font-medium">{debt.member.full_name}</TableCell>
                     <TableCell className="text-muted-foreground text-sm">{GRADE_LABELS[debt.member.degree || ''] || '-'}</TableCell>
                     <TableCell className="text-center">
-                      {debt.treasuryPending.length > 0 ? (
-                        <span className="text-destructive font-medium">{debt.treasuryPending.length}</span>
-                      ) : (
-                        <span className="text-muted-foreground">0</span>
-                      )}
+                      {debt.treasuryPending.length > 0 ? <span className="text-destructive font-medium">{debt.treasuryPending.length}</span> : <span className="text-muted-foreground">0</span>}
                     </TableCell>
                     <TableCell className="text-right text-destructive font-medium">${debt.treasuryTotal.toFixed(2)}</TableCell>
                     <TableCell className="text-center">
-                      {debt.extraordinaryPending.length > 0 ? (
-                        <span className="text-destructive font-medium">{debt.extraordinaryPending.length}</span>
-                      ) : (
-                        <span className="text-muted-foreground">0</span>
-                      )}
+                      {debt.extraordinaryPending.length > 0 ? <span className="text-destructive font-medium">{debt.extraordinaryPending.length}</span> : <span className="text-muted-foreground">0</span>}
                     </TableCell>
                     <TableCell className="text-right text-destructive font-medium">${debt.extraordinaryTotal.toFixed(2)}</TableCell>
                     <TableCell className="text-right font-bold text-destructive">${debt.grandTotal.toFixed(2)}</TableCell>
@@ -200,11 +231,10 @@ export default function CuentasPorCobrar() {
                         </Button>
                       </div>
                     </TableCell>
-                  </TableRow>
-                ))}
+                  </TableRow>)}
                 {/* Totals row */}
                 <TableRow className="bg-muted/50 font-bold">
-                  <TableCell colSpan={3} className="text-right">TOTALES:</TableCell>
+                  <TableCell colSpan={3} className="text-right">Totales:</TableCell>
                   <TableCell className="text-right text-destructive">${totalTreasury.toFixed(2)}</TableCell>
                   <TableCell />
                   <TableCell className="text-right text-destructive">${totalExtra.toFixed(2)}</TableCell>
@@ -224,8 +254,7 @@ export default function CuentasPorCobrar() {
             <DialogTitle>Cuentas por Cobrar - {selectedMember?.member.full_name}</DialogTitle>
           </DialogHeader>
 
-          {selectedMember && (
-            <div className="space-y-4">
+          {selectedMember && <div className="space-y-4">
               {/* Member info */}
               <div className="grid grid-cols-2 gap-2 text-sm p-3 rounded-lg bg-muted/50">
                 <div><span className="text-muted-foreground">Grado:</span> <span className="font-medium">{GRADE_LABELS[selectedMember.member.degree || ''] || 'N/A'}</span></div>
@@ -234,8 +263,7 @@ export default function CuentasPorCobrar() {
                 <div><span className="text-muted-foreground">Email:</span> <span className="font-medium">{selectedMember.member.email || 'N/A'}</span></div>
               </div>
 
-              {selectedMember.treasuryPending.length > 0 && (
-                <div>
+              {selectedMember.treasuryPending.length > 0 && <div>
                   <h4 className="font-semibold text-sm mb-2">Tesorería - Meses pendientes ({selectedMember.treasuryPending.length})</h4>
                   <div className="rounded-md border">
                     <Table>
@@ -249,15 +277,13 @@ export default function CuentasPorCobrar() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {selectedMember.treasuryPending.map((p, i) => (
-                          <TableRow key={i}>
+                        {selectedMember.treasuryPending.map((p, i) => <TableRow key={i}>
                             <TableCell>{p.monthName}</TableCell>
                             <TableCell>{p.year}</TableCell>
                             <TableCell className="text-right">${p.amount.toFixed(2)}</TableCell>
                             <TableCell className="text-right">{p.paid > 0 ? `$${p.paid.toFixed(2)}` : '-'}</TableCell>
                             <TableCell className="text-right font-medium text-destructive">${(p.amount - p.paid).toFixed(2)}</TableCell>
-                          </TableRow>
-                        ))}
+                          </TableRow>)}
                         <TableRow className="bg-muted/50 font-bold">
                           <TableCell colSpan={4} className="text-right">Subtotal Tesorería:</TableCell>
                           <TableCell className="text-right text-destructive">${selectedMember.treasuryTotal.toFixed(2)}</TableCell>
@@ -265,11 +291,9 @@ export default function CuentasPorCobrar() {
                       </TableBody>
                     </Table>
                   </div>
-                </div>
-              )}
+                </div>}
 
-              {selectedMember.extraordinaryPending.length > 0 && (
-                <div>
+              {selectedMember.extraordinaryPending.length > 0 && <div>
                   <h4 className="font-semibold text-sm mb-2">Cuotas Extraordinarias pendientes ({selectedMember.extraordinaryPending.length})</h4>
                   <div className="rounded-md border">
                     <Table>
@@ -282,14 +306,12 @@ export default function CuentasPorCobrar() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {selectedMember.extraordinaryPending.map((p, i) => (
-                          <TableRow key={i}>
+                        {selectedMember.extraordinaryPending.map((p, i) => <TableRow key={i}>
                             <TableCell>{p.feeName}</TableCell>
                             <TableCell className="text-right">${p.amount.toFixed(2)}</TableCell>
                             <TableCell className="text-right">{p.paid > 0 ? `$${p.paid.toFixed(2)}` : '-'}</TableCell>
                             <TableCell className="text-right font-medium text-destructive">${p.pending.toFixed(2)}</TableCell>
-                          </TableRow>
-                        ))}
+                          </TableRow>)}
                         <TableRow className="bg-muted/50 font-bold">
                           <TableCell colSpan={3} className="text-right">Subtotal Extraordinarias:</TableCell>
                           <TableCell className="text-right text-destructive">${selectedMember.extraordinaryTotal.toFixed(2)}</TableCell>
@@ -297,8 +319,7 @@ export default function CuentasPorCobrar() {
                       </TableBody>
                     </Table>
                   </div>
-                </div>
-              )}
+                </div>}
 
               <div className="flex justify-between p-3 rounded-lg bg-destructive/10 border border-destructive/30">
                 <span className="font-bold">TOTAL ADEUDADO:</span>
@@ -311,10 +332,8 @@ export default function CuentasPorCobrar() {
                   <Download className="mr-2 h-4 w-4" /> Descargar Comunicado por Mora
                 </Button>
               </div>
-            </div>
-          )}
+            </div>}
         </DialogContent>
       </Dialog>
-    </>
-  );
+    </>;
 }
