@@ -1,5 +1,12 @@
 import jsPDF from 'jspdf';
 import defaultLogoImg from '@/assets/logo-institucional.png';
+import { supabase } from '@/integrations/supabase/client';
+
+interface SignatureInfo {
+  name: string;
+  cargo: string;
+  signatureUrl?: string | null;
+}
 
 interface ReceiptData {
   receiptNumber: string;
@@ -11,10 +18,14 @@ interface ReceiptData {
   paymentDate: string;
   institutionName: string;
   logoUrl?: string | null;
-  /** For extraordinary fees with partial payment */
+  /** For partial payments */
   remainingBalance?: number;
   /** Extra details lines */
   details?: string[];
+  /** Treasurer signature info */
+  treasurer?: SignatureInfo;
+  /** Venerable Maestro signature info */
+  venerableMaestro?: SignatureInfo;
 }
 
 async function loadImage(url: string): Promise<HTMLImageElement | null> {
@@ -66,19 +77,19 @@ export async function generatePaymentReceipt(data: ReceiptData): Promise<jsPDF> 
   doc.line(10, y, pageWidth - 10, y);
   y += 8;
 
-  // Member info
+  // Member info - formal text
   doc.setFontSize(10);
   doc.setFont('helvetica', 'bold');
-  doc.text('Recibido de:', 12, y);
+  doc.text('Recibí conforme de:', 12, y);
   doc.setFont('helvetica', 'normal');
-  doc.text(data.memberName, 45, y);
+  doc.text(data.memberName, 55, y);
   y += 6;
 
   if (data.memberDegree) {
     doc.setFont('helvetica', 'bold');
     doc.text('Grado:', 12, y);
     doc.setFont('helvetica', 'normal');
-    doc.text(data.memberDegree, 45, y);
+    doc.text(data.memberDegree, 55, y);
     y += 6;
   }
 
@@ -86,8 +97,8 @@ export async function generatePaymentReceipt(data: ReceiptData): Promise<jsPDF> 
   doc.setFont('helvetica', 'bold');
   doc.text('Concepto:', 12, y);
   doc.setFont('helvetica', 'normal');
-  const conceptLines = doc.splitTextToSize(data.concept, pageWidth - 57);
-  doc.text(conceptLines, 45, y);
+  const conceptLines = doc.splitTextToSize(data.concept, pageWidth - 67);
+  doc.text(conceptLines, 55, y);
   y += conceptLines.length * 5 + 4;
 
   // Details
@@ -108,9 +119,10 @@ export async function generatePaymentReceipt(data: ReceiptData): Promise<jsPDF> 
   // Amounts box
   doc.setFontSize(10);
   const amountBoxY = y;
+  const boxHeight = data.remainingBalance !== undefined && data.remainingBalance > 0 ? 28 : 20;
   doc.setDrawColor(100);
   doc.setLineWidth(0.3);
-  doc.roundedRect(10, amountBoxY - 3, pageWidth - 20, data.remainingBalance !== undefined && data.remainingBalance > 0 ? 28 : 20, 2, 2);
+  doc.roundedRect(10, amountBoxY - 3, pageWidth - 20, boxHeight, 2, 2);
 
   doc.setFont('helvetica', 'bold');
   doc.text('Valor total:', 14, y);
@@ -133,21 +145,48 @@ export async function generatePaymentReceipt(data: ReceiptData): Promise<jsPDF> 
     y += 6;
   }
 
-  y += 8;
+  y += 10;
 
-  // Signature line
+  // Dual signatures
+  const sigY = Math.min(y, 170); // Ensure space before footer
+  const leftX = pageWidth / 4;
+  const rightX = (pageWidth * 3) / 4;
+
+  // Treasurer signature
+  if (data.treasurer?.signatureUrl) {
+    const sigImg = await loadImage(data.treasurer.signatureUrl);
+    if (sigImg) {
+      const r = Math.min(35 / sigImg.width, 18 / sigImg.height);
+      doc.addImage(sigImg, 'PNG', leftX - (sigImg.width * r) / 2, sigY - 18, sigImg.width * r, sigImg.height * r);
+    }
+  }
   doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
   doc.setLineWidth(0.3);
-  doc.line(pageWidth / 2 - 30, y, pageWidth / 2 + 30, y);
-  y += 4;
-  doc.text('Tesorero', pageWidth / 2, y, { align: 'center' });
+  doc.line(leftX - 25, sigY, leftX + 25, sigY);
+  doc.text(data.treasurer?.name || 'Tesorero', leftX, sigY + 4, { align: 'center' });
+  doc.setFont('helvetica', 'bold');
+  doc.text('Tesorero', leftX, sigY + 8, { align: 'center' });
+
+  // Venerable Maestro signature
+  if (data.venerableMaestro?.signatureUrl) {
+    const sigImg = await loadImage(data.venerableMaestro.signatureUrl);
+    if (sigImg) {
+      const r = Math.min(35 / sigImg.width, 18 / sigImg.height);
+      doc.addImage(sigImg, 'PNG', rightX - (sigImg.width * r) / 2, sigY - 18, sigImg.width * r, sigImg.height * r);
+    }
+  }
+  doc.setFont('helvetica', 'normal');
+  doc.line(rightX - 25, sigY, rightX + 25, sigY);
+  doc.text(data.venerableMaestro?.name || 'Venerable Maestro', rightX, sigY + 4, { align: 'center' });
+  doc.setFont('helvetica', 'bold');
+  doc.text('Venerable Maestro', rightX, sigY + 8, { align: 'center' });
 
   // Footer
-  y = 200;
   doc.setFontSize(7);
+  doc.setFont('helvetica', 'normal');
   doc.setTextColor(120);
-  doc.text('Este recibo es un comprobante de pago válido.', pageWidth / 2, y, { align: 'center' });
+  doc.text('Este recibo es un comprobante de pago válido.', pageWidth / 2, 200, { align: 'center' });
   doc.setTextColor(0);
 
   return doc;
@@ -162,14 +201,19 @@ function formatDate(dateStr: string): string {
   }
 }
 
-/** Generate a unique receipt number based on timestamp */
-export function generateReceiptNumber(): string {
-  const now = new Date();
-  const y = now.getFullYear().toString().slice(-2);
-  const m = (now.getMonth() + 1).toString().padStart(2, '0');
-  const d = now.getDate().toString().padStart(2, '0');
-  const rand = Math.floor(Math.random() * 9999).toString().padStart(4, '0');
-  return `R${y}${m}${d}-${rand}`;
+/** Get next sequential receipt number from database */
+export async function getNextReceiptNumber(module: 'treasury' | 'extraordinary' | 'degree'): Promise<string> {
+  try {
+    const { data, error } = await supabase.rpc('get_next_receipt_number', { p_module: module });
+    if (error) throw error;
+    return data as string;
+  } catch (err) {
+    console.error('Error getting receipt number:', err);
+    // Fallback: timestamp-based
+    const now = new Date();
+    const prefix = module === 'treasury' ? 'TSR' : module === 'extraordinary' ? 'EXT' : 'GRD';
+    return `${prefix}${now.getTime().toString().slice(-7)}`;
+  }
 }
 
 export function downloadReceipt(doc: jsPDF, memberName: string) {

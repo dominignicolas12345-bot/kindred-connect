@@ -1,7 +1,7 @@
-import { useEffect, useState, forwardRef } from 'react';
+import { useEffect, useState, useCallback, forwardRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
-import { Plus, Pencil, Trash2, FileText } from 'lucide-react';
+import { Plus, Pencil, Trash2, FileText, Download, MessageCircle } from 'lucide-react';
 import { ReceiptUpload } from '@/components/ui/receipt-upload';
 import { formatDateForDisplay, getSystemDateString } from '@/lib/dateUtils';
 import {
@@ -17,6 +17,9 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
+import { useSettings } from '@/contexts/SettingsContext';
+import { generatePaymentReceipt, getNextReceiptNumber, downloadReceipt, getReceiptWhatsAppMessage } from '@/lib/receiptGenerator';
+import { openWhatsApp } from '@/lib/whatsappUtils';
 
 interface DegreeFee {
   id: string;
@@ -29,11 +32,13 @@ interface DegreeFee {
 }
 
 const CATEGORIES = [
-  { value: 'iniciacion', label: 'Iniciacion' },
-  { value: 'aumento_salario', label: 'Aumento de Salario (Companero)' },
-  { value: 'exaltacion', label: 'Exaltacion (Maestro)' },
-  { value: 'afiliacion_plancha', label: 'Afiliacion / Plancha de Quite' },
+  { value: 'iniciacion', label: 'Iniciación' },
+  { value: 'aumento_salario', label: 'Aumento de Salario (Compañero)' },
+  { value: 'exaltacion', label: 'Exaltación (Maestro)' },
+  { value: 'afiliacion_plancha', label: 'Afiliación / Plancha de Quite' },
 ];
+
+const getCategoryLabel = (value: string) => CATEGORIES.find(c => c.value === value)?.label || value;
 
 const DegreeFees = forwardRef<HTMLDivElement>(function DegreeFees(_props, ref) {
   const [fees, setFees] = useState<DegreeFee[]>([]);
@@ -49,7 +54,11 @@ const DegreeFees = forwardRef<HTMLDivElement>(function DegreeFees(_props, ref) {
     amount: '',
     fee_date: getSystemDateString(),
   });
+  const [lastReceiptData, setLastReceiptData] = useState<{
+    description: string; amount: number; category: string; feeDate: string;
+  } | null>(null);
   const { toast } = useToast();
+  const { settings } = useSettings();
 
   useEffect(() => {
     loadFees();
@@ -132,6 +141,13 @@ const DegreeFees = forwardRef<HTMLDivElement>(function DegreeFees(_props, ref) {
       } else {
         const { error } = await supabase.from('degree_fees').insert([feeData]);
         if (error) throw error;
+        // Show receipt dialog after new registration
+        setLastReceiptData({
+          description: formData.description,
+          amount: parseFloat(formData.amount),
+          category: formData.category,
+          feeDate: formData.fee_date,
+        });
         toast({ title: 'Derecho de grado registrado correctamente' });
       }
 
@@ -155,13 +171,61 @@ const DegreeFees = forwardRef<HTMLDivElement>(function DegreeFees(_props, ref) {
     }
   };
 
+  const getTreasurerAndVM = useCallback(async () => {
+    let treasurerName = 'Tesorero';
+    let vmName = 'Venerable Maestro';
+    
+    if (settings.treasurer_id) {
+      const { data } = await supabase.from('members').select('full_name').eq('id', settings.treasurer_id).maybeSingle();
+      if (data) treasurerName = data.full_name;
+    }
+    
+    const { data: vmData } = await supabase.from('members').select('full_name').eq('cargo_logial', 'venerable_maestro').limit(1).maybeSingle();
+    if (vmData) vmName = vmData.full_name;
+    
+    return {
+      treasurer: { name: treasurerName, cargo: 'Tesorero', signatureUrl: settings.treasurer_signature_url },
+      venerableMaestro: { name: vmName, cargo: 'Venerable Maestro', signatureUrl: settings.vm_signature_url },
+    };
+  }, [settings]);
+
+  const handleDownloadReceipt = async () => {
+    if (!lastReceiptData) return;
+    const receiptNumber = await getNextReceiptNumber('degree');
+    const sigs = await getTreasurerAndVM();
+    const doc = await generatePaymentReceipt({
+      receiptNumber,
+      memberName: lastReceiptData.description,
+      concept: `Pago por derecho de grado – ${getCategoryLabel(lastReceiptData.category)}`,
+      totalAmount: lastReceiptData.amount,
+      amountPaid: lastReceiptData.amount,
+      paymentDate: lastReceiptData.feeDate,
+      institutionName: settings.institution_name,
+      logoUrl: settings.logo_url,
+      treasurer: sigs.treasurer,
+      venerableMaestro: sigs.venerableMaestro,
+    });
+    downloadReceipt(doc, lastReceiptData.description);
+  };
+
+  const handleSendReceiptWhatsApp = () => {
+    if (!lastReceiptData) return;
+    const msg = getReceiptWhatsAppMessage(
+      lastReceiptData.description,
+      `Pago por derecho de grado – ${getCategoryLabel(lastReceiptData.category)}`,
+      lastReceiptData.amount,
+    );
+    // No phone for degree fees, just copy message
+    toast({ title: 'Mensaje copiado', description: 'Copie y envíe manualmente el mensaje de WhatsApp' });
+  };
+
   return (
     <div ref={ref} className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">Derechos de Grado</h1>
           <p className="text-muted-foreground mt-1">
-            Registro de pagos por iniciacion, aumento de salario, exaltacion y afiliacion
+            Registro de pagos por iniciación, aumento de salario, exaltación y afiliación
           </p>
         </div>
         <Button onClick={openNewDialog}>
@@ -174,8 +238,8 @@ const DegreeFees = forwardRef<HTMLDivElement>(function DegreeFees(_props, ref) {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[200px]">Descripcion</TableHead>
-              <TableHead className="w-[180px]">Categoria</TableHead>
+              <TableHead className="w-[200px]">Descripción</TableHead>
+              <TableHead className="w-[180px]">Categoría</TableHead>
               <TableHead className="w-[100px]">Monto</TableHead>
               <TableHead className="w-[100px]">Fecha</TableHead>
               <TableHead className="w-[100px]">Comprobante</TableHead>
@@ -198,7 +262,7 @@ const DegreeFees = forwardRef<HTMLDivElement>(function DegreeFees(_props, ref) {
                 <TableRow key={fee.id}>
                   <TableCell className="font-medium">{fee.description}</TableCell>
                   <TableCell className="text-sm">
-                    {CATEGORIES.find(c => c.value === fee.category)?.label || fee.category}
+                    {getCategoryLabel(fee.category)}
                   </TableCell>
                   <TableCell>${fee.amount.toFixed(2)}</TableCell>
                   <TableCell>{formatDateForDisplay(fee.fee_date)}</TableCell>
@@ -229,6 +293,7 @@ const DegreeFees = forwardRef<HTMLDivElement>(function DegreeFees(_props, ref) {
         </Table>
       </div>
 
+      {/* New/Edit Dialog */}
       <Dialog open={showDialog} onOpenChange={(open) => { setShowDialog(open); if (!open) resetForm(); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -240,25 +305,22 @@ const DegreeFees = forwardRef<HTMLDivElement>(function DegreeFees(_props, ref) {
           
           <div className="space-y-4">
             <div>
-              <Label htmlFor="description">Descripcion *</Label>
+              <Label htmlFor="description">Descripción *</Label>
               <Input id="description" value={formData.description}
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="Ej: Iniciacion de H. Juan Perez" />
+                placeholder="Ej: Iniciación de H. Juan Pérez" />
             </div>
 
             <div>
-              <Label htmlFor="category">Categoria *</Label>
+              <Label htmlFor="category">Categoría *</Label>
               <Select value={formData.category} onValueChange={(value) => setFormData({ ...formData, category: value })}>
-                <SelectTrigger><SelectValue placeholder="Seleccione categoria" /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="Seleccione categoría" /></SelectTrigger>
                 <SelectContent>
                   {CATEGORIES.map((cat) => (
                     <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground mt-1">
-                Seleccione el tipo de derecho de grado correspondiente
-              </p>
             </div>
 
             <div>
@@ -283,12 +345,9 @@ const DegreeFees = forwardRef<HTMLDivElement>(function DegreeFees(_props, ref) {
             <ReceiptUpload
               existingUrl={editingFee?.receipt_url}
               onFileSelect={setReceiptFile}
-              label="Comprobante de Pago *"
+              label="Comprobante de Pago"
               accept=".jpg,.jpeg,.png,.pdf"
             />
-            <p className="text-xs text-muted-foreground">
-              Adjunte el comprobante de pago del derecho de grado
-            </p>
           </div>
 
           <DialogFooter>
@@ -296,6 +355,33 @@ const DegreeFees = forwardRef<HTMLDivElement>(function DegreeFees(_props, ref) {
             <Button onClick={handleSubmit} disabled={uploading}>
               {uploading ? 'Guardando...' : (editingFee ? 'Actualizar' : 'Registrar')}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Receipt Dialog */}
+      <Dialog open={!!lastReceiptData} onOpenChange={() => setLastReceiptData(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Recibo de Pago</DialogTitle>
+            <DialogDescription>
+              Derecho de grado registrado
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="p-3 bg-muted/50 rounded-md text-sm space-y-1">
+              <p><strong>Concepto:</strong> Pago por derecho de grado – {getCategoryLabel(lastReceiptData?.category || '')}</p>
+              <p><strong>Descripción:</strong> {lastReceiptData?.description}</p>
+              <p><strong>Monto:</strong> ${lastReceiptData?.amount?.toFixed(2)}</p>
+            </div>
+            <div className="flex gap-2">
+              <Button className="flex-1" onClick={handleDownloadReceipt}>
+                <Download className="mr-2 h-4 w-4" /> Descargar PDF
+              </Button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setLastReceiptData(null)}>Cerrar</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

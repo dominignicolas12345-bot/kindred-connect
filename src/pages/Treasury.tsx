@@ -20,7 +20,7 @@ import { getSystemDateString, getSystemYear, getSystemMonth, getFiscalYearInfo, 
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { generatePaymentReceipt, generateReceiptNumber, downloadReceipt, getReceiptWhatsAppMessage } from '@/lib/receiptGenerator';
+import { generatePaymentReceipt, getNextReceiptNumber, downloadReceipt, getReceiptWhatsAppMessage } from '@/lib/receiptGenerator';
 import { openWhatsApp } from '@/lib/whatsappUtils';
 
 interface Member {
@@ -80,7 +80,7 @@ const Treasury = forwardRef<HTMLDivElement>(function Treasury(_props, ref) {
   } | null>(null);
   const [processingAdvancePayment, setProcessingAdvancePayment] = useState(false);
   const [lastReceiptData, setLastReceiptData] = useState<{
-    memberName: string; memberPhone?: string | null; concept: string; totalAmount: number; amountPaid: number; paymentDate: string; remaining?: number;
+    memberName: string; memberPhone?: string | null; memberDegree?: string; concept: string; totalAmount: number; amountPaid: number; paymentDate: string; remaining?: number;
   } | null>(null);
 
   const { toast } = useToast();
@@ -239,7 +239,8 @@ const Treasury = forwardRef<HTMLDivElement>(function Treasury(_props, ref) {
       setLastReceiptData({
         memberName: selectedPayment.memberName,
         memberPhone: member?.phone,
-        concept: `Cuota mensual - ${monthName} ${selectedPayment.year}`,
+        memberDegree: member?.degree || undefined,
+        concept: `Pago de cuota mensual – ${monthName} ${selectedPayment.year}`,
         totalAmount: memberFee,
         amountPaid: parsedAmount,
         paymentDate: paymentDate || getSystemPaymentDate(),
@@ -256,11 +257,34 @@ const Treasury = forwardRef<HTMLDivElement>(function Treasury(_props, ref) {
     }
   };
 
+  const getTreasurerAndVM = useCallback(async () => {
+    let treasurerName = 'Tesorero';
+    let vmName = 'Venerable Maestro';
+    
+    // Get treasurer name
+    if (settings.treasurer_id) {
+      const t = members.find(m => m.id === settings.treasurer_id);
+      if (t) treasurerName = t.full_name;
+    }
+    
+    // Get VM (cargo_logial = 'venerable_maestro')
+    const { data: vmData } = await supabase.from('members').select('full_name').eq('cargo_logial', 'venerable_maestro').limit(1).maybeSingle();
+    if (vmData) vmName = vmData.full_name;
+    
+    return {
+      treasurer: { name: treasurerName, cargo: 'Tesorero', signatureUrl: settings.treasurer_signature_url },
+      venerableMaestro: { name: vmName, cargo: 'Venerable Maestro', signatureUrl: settings.vm_signature_url },
+    };
+  }, [settings, members]);
+
   const handleDownloadReceipt = async () => {
     if (!lastReceiptData) return;
+    const receiptNumber = await getNextReceiptNumber('treasury');
+    const sigs = await getTreasurerAndVM();
     const doc = await generatePaymentReceipt({
-      receiptNumber: generateReceiptNumber(),
+      receiptNumber,
       memberName: lastReceiptData.memberName,
+      memberDegree: lastReceiptData.memberDegree,
       concept: lastReceiptData.concept,
       totalAmount: lastReceiptData.totalAmount,
       amountPaid: lastReceiptData.amountPaid,
@@ -268,6 +292,8 @@ const Treasury = forwardRef<HTMLDivElement>(function Treasury(_props, ref) {
       institutionName: settings.institution_name,
       logoUrl: settings.logo_url,
       remainingBalance: lastReceiptData.remaining,
+      treasurer: sigs.treasurer,
+      venerableMaestro: sigs.venerableMaestro,
     });
     downloadReceipt(doc, lastReceiptData.memberName);
   };
